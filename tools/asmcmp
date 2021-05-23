@@ -1,0 +1,656 @@
+#!/usr/bin/perl -l
+
+use strict;
+use warnings;
+
+use File::Temp qw(tempfile);
+use Getopt::Long qw(GetOptionsFromArray :config no_ignore_case bundling);
+
+
+my $PROGNAME = 'asmcmp';
+my $VERSION  = '1';
+my $AUTHOR   = 'Gauthier Voron';
+my $EMAIL    = 'gauthier.voron@mnesic.fr';
+
+my $COLOR;
+my $DEBUG;
+my $FULLDIFF;
+my $SCORE;
+
+my $FORMAT_RED    = "\033[31m";
+my $FORMAT_GREEN  = "\033[32m";
+my $FORMAT_YELLOW = "\033[33m";
+my $FORMAT_RESET  = "\033[0m";
+
+
+sub parse_object
+{
+    my ($object) = @_;
+    my @command = ('objdump', '--disassemble-all', '--demangle', $object);
+    my ($fh, $line, $section, $function, $side, $addr, $code, $body);
+    my %functions;
+
+    if (!open($fh, '-|', @command)) {
+	return undef;
+    }
+
+    $body = [];
+
+    debug("Parsing '$object'");
+
+    while (defined($line = <$fh>)) {
+	chomp($line);
+
+	if ($line =~ m/^\s+([0-9a-f]+):\s+(?:..(?: [0-9a-f]{2})*)\s+(.*)/) {
+	    ($addr, $code) = ($1, $2);
+	    push(@$body, sprintf("%-8s %s", $addr, $code));
+	    next;
+	}
+
+	if ($line =~ m/^Disassembly of section (.*):$/) {
+	    $section = $1;
+	    next;
+	}
+
+	if ($line =~ m/^[0-9a-f]+\s+<asm(model|test)_(.*)\(\)>:$/) {
+	    ($side, $function) = ($1, $2);
+	    debug("Found $side for function '$function' in '$section'");
+	    $body = [];
+	    next;
+	}
+
+	if (($line =~ m/^\s*$/)
+	    && defined($section) && ($section eq '.text')
+	    && defined($function)) {
+	    $functions{$function}->{$side} = $body;
+	    $body = [];
+	    $function = undef;
+	}
+    }
+
+    close($fh);
+
+    return \%functions;
+}
+
+sub get_basic_blocks
+{
+    my ($insts) = @_;
+    my (@blocks, $block, $inst, $addr, $opcode, $ops, $active, $jaddr,%jaddrs);
+    my ($entry, $first, $begin, $end, @ret, $rblock);
+
+    $active = 0;
+    $block = [];
+
+    foreach $inst (@$insts) {
+	if (!($inst =~ m/^([0-9a-f]+)\s+(\S+)\s*(.*)$/)) {
+	    next;
+	}
+
+	($addr, $opcode, $ops) = ($1, $2, $3);
+
+	debug("    $addr: '$opcode' '$ops'");
+
+	if ($opcode eq 'cli') {
+	    $active = 1;
+	    $begin = $addr;
+	    debug("  Active section starts");
+	    next;
+	} elsif ($opcode eq 'hlt') {
+	    $active = 0;
+	    $end = $addr;
+	    debug("  Active section ends");
+	    next;
+	}
+
+	if ($active == 0) {
+	    next;
+	}
+
+	if (($opcode eq 'lea') && ($ops =~ /# ([0-9a-f]+) </)) {
+	    $opcode .= ' ' . $1;
+	    debug("   =" . $addr . ": '$opcode'");
+	}
+
+	if ($opcode =~ m/^call/) {
+	    if ($ops =~ /^[0-9a-f]+ <(.*)\@plt>$/) {
+		$opcode = "call $1";
+	    } else {
+		$opcode = 'call';
+	    }
+	    push(@$block, [ $addr, $opcode, undef, $inst ]);
+	    debug("   =" . $addr . ": '$opcode'");
+	    push(@blocks, $block);
+	    $block = [];
+	    debug("  End of basic block");
+	} elsif ($opcode =~ m/^ret/) {
+	    push(@$block, [ $addr, 'ret', undef, $inst ]);
+	    debug("   =" . $addr . ": 'ret'");
+	    push(@blocks, $block);
+	    $block = [];
+	    debug("  End of basic block");
+	} elsif ($opcode =~ m/^j/) {
+	    if ($ops =~ m/^([0-9a-f]+)/) {
+		$jaddr = $1;
+		$jaddrs{$jaddr} = 1;
+	    } else {
+		die ("unable to parse code '$inst'");
+	    }
+	    push(@$block, [ $addr, 'j', $jaddr, $inst ]);
+	    debug("   =" . $addr . ": 'j' $jaddr");
+	    push(@blocks, $block);
+	    $block = [];
+	    debug("  End of basic block");
+	} else {
+	    push(@$block, [ $addr, $opcode, $ops, $inst ]);
+	}
+    }
+
+    $rblock = [];
+
+    foreach $block (@blocks) {
+	$first = 1;
+
+	debug('  Basic Block');
+
+	foreach $entry (@$block) {
+	    ($addr, $opcode, $ops, $inst) = @$entry;
+	    if (defined($jaddrs{$addr})) {
+		if (!$first) {
+		    push(@ret, $rblock);
+
+		    debug('  Basic Block');
+		    $rblock = [];
+		}
+	    }
+	    $first = 0;
+
+	    if ($opcode eq 'j') {
+		if ((hex($ops) > hex($begin)) && (hex($ops) < hex($end))) {
+		    $jaddr = sprintf("%x", hex($ops) - hex($addr));
+		    $opcode = 'j ' . $jaddr;
+		}
+	    }
+
+	    debug("    $opcode");
+	    push(@$rblock, [ $opcode, $inst ]);
+	}
+
+	push(@ret, $rblock);
+	$rblock = [];
+    }
+
+    return \@ret;
+}
+
+sub print_block_diff
+{
+    my ($mblocks, $tblocks) = @_;
+    my ($block, $entry, $opcode, $inst, $fh, $mpath, $tpath, $line);
+    my (@minsts, @tinsts, $mln, $tln, $ln, $pcol, $mcol, $ecol);
+
+    ($fh, $mpath) = tempfile(UNLINK => 1);
+    foreach $block (@$mblocks) {
+	foreach $entry (@$block) {
+	    ($opcode, $inst) = @$entry;
+	    printf($fh "%s\n", $opcode);
+	    push(@minsts, $inst);
+	}
+    }
+
+    ($fh, $tpath) = tempfile(UNLINK => 1);
+    foreach $block (@$tblocks) {
+	foreach $entry (@$block) {
+	    ($opcode, $inst) = @$entry;
+	    printf($fh "%s\n", $opcode);
+	    push(@tinsts, $inst);
+	}
+    }
+
+    if (!open($fh, '-|', 'diff', '-Nau', $mpath, $tpath)) {
+	return undef;
+    }
+
+    $tln = 1;
+
+    if ($COLOR) {
+	$pcol = $FORMAT_GREEN;
+	$mcol = $FORMAT_RED;
+	$ecol = $FORMAT_RESET;
+    } else {
+	$pcol = '';
+	$mcol = '';
+	$ecol = '';
+    }
+
+    while (defined($line = <$fh>)) {
+	chomp($line);
+
+	if (($line =~ m/^---/) || ($line =~ m/^\+\+\+/)) {
+	    next;
+	}
+
+	if ($line =~ m/^@@ -(\d+),\d+ \+(\d+),/) {
+	    $ln = $tln;
+	    ($mln, $tln) = ($1, $2);
+
+	    if ($FULLDIFF) {
+		while ($ln < $tln) {
+		    printf("   %s\n", $tinsts[$ln - 1]);
+		    $ln += 1;
+		}
+	    } else {
+		$ln = $tln;
+	    }
+
+	    next;
+	}
+
+	if ($line =~ m/^ /) {
+	    printf("   %s\n", $tinsts[$tln - 1]);
+	    $mln += 1;
+	    $tln += 1;
+	} elsif ($line =~ m/^\+/) {
+	    printf("  ${pcol}+%s${ecol}\n", $tinsts[$tln - 1]);
+	    $tln += 1;
+	} elsif ($line =~ m/^-/) {
+	    printf("  ${mcol}-%s${ecol}\n", $minsts[$mln - 1]);
+	    $mln += 1;
+	}
+    }
+
+    if ($FULLDIFF) {
+	while ($tln <= scalar(@tinsts)) {
+	    printf("   %s\n", $tinsts[$tln - 1]);
+	    $tln += 1;
+	}
+    }
+
+    close($fh);
+}
+
+sub compare_blocks
+{
+    my ($mblocks, $tblocks) = @_;
+    my ($block, $entry, $opcode, $fh, $mpath, $tpath, %table, $i, $line);
+    my $score = 0;
+
+    ($fh, $mpath) = tempfile(UNLINK => 1);
+    foreach $block (@$mblocks) {
+	%table = ();
+	foreach $entry (@$block) {
+	    ($opcode, $_) = @$entry;
+	    $table{$opcode} += 1;
+	}
+	foreach $opcode (sort { $a cmp $b } keys(%table)) {
+	    for ($i = 0; $i < $table{$opcode}; $i++) {
+		printf($fh "%s\n", $opcode);
+	    }
+	}
+	printf($fh "\n");
+    }
+
+    ($fh, $tpath) = tempfile(UNLINK => 1);
+    foreach $block (@$tblocks) {
+	%table = ();
+	foreach $entry (@$block) {
+	    ($opcode, $_) = @$entry;
+	    $table{$opcode} += 1;
+	}
+	foreach $opcode (sort { $a cmp $b } keys(%table)) {
+	    for ($i = 0; $i < $table{$opcode}; $i++) {
+		printf($fh "%s\n", $opcode);
+	    }
+	}
+	printf($fh "\n");
+    }
+
+    if (!open($fh, '-|', 'diff', '-Nay', $mpath, $tpath)) {
+	return undef;
+    }
+
+    while (defined($line = <$fh>)) {
+	chomp($line);
+
+	if ($line =~ m/[><|]/) {
+	    $score += 1;
+	}
+    }
+
+    close($fh);
+
+    return $score;
+}
+
+sub check_object
+{
+    my ($object, $functions) = @_;
+    my ($mblocks, $tblocks);
+    my ($function, $score, @fails);
+
+    if (!defined($functions)) {
+	return undef;
+    }
+
+    print_object_header(scalar(%$functions), $object);
+
+    debug("Analysing object '$object'");
+
+    foreach $function (keys(%$functions)) {
+	debug("Analysing model of '$function'");
+	$mblocks = get_basic_blocks($functions->{$function}->{'model'});
+
+	debug("Analysing test of '$function'");
+	$tblocks = get_basic_blocks($functions->{$function}->{'test'});
+
+	debug("Comparing basic blocks for '$function'");
+	$score = compare_blocks($mblocks, $tblocks);
+
+	print_test_score($score, $function);
+
+	if ($score > $SCORE) {
+	    print_block_diff($mblocks, $tblocks);
+	    print_test_failure($function);
+	    push(@fails, $function);
+	} else {
+	    print_test_success($function);
+	}
+    }
+
+    print_object_header(scalar(%$functions), $object);
+
+    return \@fails;
+}
+
+sub usage
+{
+    return <<'EOF';
+Usage: $0 <elf-file...>
+
+Parse x86 assembly code in the given elf files and detect instruction
+differences between "model" and "test" functions of the same asmcmp test case.
+
+Options:
+
+  -c <mode>, --color=<mode>   Use colored output either "never", "always" or
+                              "auto"matically detects if the stdout is a
+                              terminal.
+
+  -d, --debug                 Print debug messages on stderr.
+
+  -D, --full-diff             Print the full test function with differences for
+                              failed asmcmp test cases.
+
+  -h, --help                  Print this message and exit.
+
+  -s <int>, --score=<int>     Only an asmcmp test case has failed if its score
+                              is strictly greater to <int>.
+
+  -V, --version               Print version information and exit.
+EOF
+}
+
+sub version
+{
+    return <<"EOF";
+$PROGNAME $VERSION
+$AUTHOR
+$EMAIL
+EOF
+}
+
+sub fatal
+{
+    my ($msg) = @_;
+
+    if (!defined($msg)) {
+	$msg = 'undefined error';
+    }
+
+    printf(STDERR "%s: %s\n", $PROGNAME, $msg);
+    printf(STDERR "Please type '%s --help' for more information\n", $0);
+
+    exit (1);
+}
+
+sub debug
+{
+    my ($msg) = @_;
+    my ($scol, $ecol);
+
+    if ($DEBUG == 0) {
+	return;
+    }
+
+    if (!defined($msg)) {
+	$msg = 'undefined debug message';
+    }
+
+    if ($COLOR) {
+	$scol = $FORMAT_YELLOW;
+	$ecol = $FORMAT_RESET;
+    } else {
+	$scol = '';
+	$ecol = '';
+    }
+
+    printf(STDERR "${scol}[ DEBUG    ]${ecol} %s\n", $msg);
+}
+
+sub opterr
+{
+    my ($msg) = @_;
+    my ($option);
+
+    if (!defined($msg) || !($msg =~ /^Unknown option: (.*)$/)) {
+	fatal('option parsing error');
+    }
+
+    $option = $1;
+
+    fatal("unknown option '$option'");
+}
+
+
+
+sub print_header
+{
+    my ($ntest, $nobject) = @_;
+    my ($scol, $ecol);
+
+    if ($COLOR) {
+	$scol = $FORMAT_GREEN;
+	$ecol = $FORMAT_RESET;
+    } else {
+	$scol = '';
+	$ecol = '';
+    }
+
+    printf("${scol}[==========]${ecol} Running %d test from %d objects.\n",
+	   $ntest, $nobject);
+}
+
+sub print_footer
+{
+    my ($ntest, $nfail, $fails) = @_;
+    my ($object, $function, $pcol, $fcol, $ecol);
+
+    if ($COLOR) {
+	$pcol = $FORMAT_GREEN;
+	$fcol = $FORMAT_RED;
+	$ecol = $FORMAT_RESET;
+    } else {
+	$pcol = '';
+	$fcol = '';
+	$ecol = '';
+    }
+
+    if ($ntest > $nfail) {
+	printf("${pcol}[  PASSED  ]${ecol} %d tests.\n", ($ntest - $nfail));
+    }
+
+    if ($nfail > 0) {
+	printf("${fcol}[  FAILED  ]${ecol} %d tests, listed below:\n", $nfail);
+
+	foreach $object (sort { $a cmp $b } keys(%$fails)) {
+	    foreach $function (@{$fails->{$object}}) {
+		printf("${fcol}[  FAILED  ]${ecol} %s: %s\n", $object,
+		       $function);
+	    }
+	}
+    }
+}
+
+sub print_object_header
+{
+    my ($ntest, $object) = @_;
+    my ($scol, $ecol);
+
+    if ($COLOR) {
+	$scol = $FORMAT_GREEN;
+	$ecol = $FORMAT_RESET;
+    } else {
+	$scol = '';
+	$ecol = '';
+    }
+
+    printf("${scol}[----------]${ecol} %d tests from %s.\n", $ntest, $object);
+}
+
+sub print_test_score
+{
+    my ($score, $function) = @_;
+    my ($scol, $ecol);
+
+    if ($COLOR) {
+	if ($score <= $SCORE) {
+	    $scol = $FORMAT_GREEN;
+	} else {
+	    $scol = $FORMAT_RED;
+	}
+	$ecol = $FORMAT_RESET;
+    } else {
+	$scol = '';
+	$ecol = '';
+    }
+
+    printf("${scol}[ %-8d ]$ecol %s\n", $score, $function);
+}
+
+sub print_test_success
+{
+    my ($function) = @_;
+    my ($scol, $ecol);
+
+    if ($COLOR) {
+	$scol = $FORMAT_GREEN;
+	$ecol = $FORMAT_RESET;
+    } else {
+	$scol = '';
+	$ecol = '';
+    }
+
+    printf("${scol}[       OK ]$ecol %s\n", $function);
+}
+
+sub print_test_failure
+{
+    my ($function) = @_;
+    my ($scol, $ecol);
+
+    if ($COLOR) {
+	$scol = $FORMAT_RED;
+	$ecol = $FORMAT_RESET;
+    } else {
+	$scol = '';
+	$ecol = '';
+    }
+
+    printf("${scol}[  FAILED  ]$ecol %s\n", $function);
+}
+
+sub main
+{
+    my (@objects);
+    my ($oldwarn, $object, %parsed, $sumtest, $ffunc, %fails, $nfail);
+
+    $oldwarn = $SIG{__WARN__};
+    $SIG{__WARN__} = \&opterr;
+    GetOptionsFromArray(
+	\@_,
+	'c|color=s'   => \$COLOR,
+	'd|debug'     => \$DEBUG,
+	'D|full-diff' => \$FULLDIFF,
+	'h|help'      => sub { printf("%s", usage()); exit (0); },
+	's|score=s'   => \$SCORE,
+	'V|version'   => sub { printf("%s", version()); exit (0); }
+	);
+    $SIG{__WARN__} = $oldwarn;
+
+    @objects = @_;
+
+    if (scalar(@objects) == 0) {
+	fatal('missing elf-file operands');
+    }
+
+    if (!defined($COLOR)) {
+	$COLOR = 'auto';
+    }
+
+    if (grep { $_ eq lc($COLOR) } qw(1 t true yes y always)) {
+	$COLOR = 1;
+    } elsif (grep { $_ eq lc($COLOR) } qw(0 f false no n never)) {
+	$COLOR = 0;
+    } elsif (lc($COLOR) eq 'auto') {
+	$COLOR = (-t STDOUT);
+    } else {
+	fatal("invalid color option: '$COLOR'");
+    }
+
+    if (!defined($DEBUG)) {
+	$DEBUG = 0;
+    }
+
+    if (!defined($FULLDIFF)) {
+	$FULLDIFF = 0;
+    }
+
+    if (!defined($SCORE)) {
+	$SCORE = 0;
+    }
+
+    if (!($SCORE =~ /^[1-9]\d*$/) && ($SCORE ne '0')) {
+	fatal("invalid score option: '$SCORE'");
+    }
+
+    $sumtest = 0;
+
+    foreach $object (@objects) {
+	$parsed{$object} = parse_object($object);
+	$sumtest += scalar(%{$parsed{$object}});
+    }
+
+    print_header($sumtest, scalar(@objects));
+
+    $nfail = 0;
+
+    foreach $object (@objects) {
+	$ffunc = check_object($object, $parsed{$object});
+	$fails{$object} = $ffunc;
+	$nfail += scalar(@$ffunc);
+
+	printf("\n");
+    }
+
+    print_footer($sumtest, $nfail, \%fails);
+
+    if ($nfail == 0) {
+	return 0;
+    } else {
+	return 1;
+    }
+}
+
+
+exit (main(@ARGV));
+__END__

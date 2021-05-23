@@ -1,0 +1,32 @@
+#!/bin/bash
+
+num=$(grep 'Overhead' "$@" | wc -l)
+types=$(grep 'Overhead' "$@" | uniq | wc -l)
+
+if [ -t 1 ] ; then
+    green="\033[32m"
+    yellow="\033[33m"
+    reset="\033[0m"
+else
+    green=""
+    yellow=""
+    reset=""
+fi
+
+if [ ${num} -eq 0 ] ; then
+    printf "${green}[   PURE   ]${reset} 0 overhead passby.\n"
+else
+    printf "${yellow}[  PASSBY  ]${reset} %d overhead passby of %d types.\n" \
+	   ${num} ${types}
+
+    for file in "$@" ; do
+	types=$(grep 'Overhead' "${file}" | uniq | wc -l)
+
+	if [ ${types} -eq 0 ] ; then
+	    continue
+	fi
+
+	printf "${yellow}[  PASSBY  ]${reset} %s: %d types.\n" \
+	       "${file}" ${types}
+    done
+fi

@@ -18,7 +18,14 @@
 
 CXXFLAGS  := -Wall -Wextra -O3 -std=c++20 -g -flto
 LDXXFLAGS := -flto
+ACXXFLAGS := -Wall -Wextra -O3 -std=c++20 -g -DNDEBUG
 
+
+define cmd-aldcxx
+  $(call cmd-print,  LDCXX   $(strip $(1)))
+  $(Q)g++ $(ACXXFLAGS) -o $(1) $(2) $(addprefix -I, $(5)) \
+    $(addprefix -L, $(4)) $(addprefix -l, $(3))
+endef
 
 define cmd-ar
   $(call cmd-print,  AR      $(strip $(1)))
@@ -54,14 +61,14 @@ define cmd-install
    $(Q)install -d $(strip $(call NOSLASH, $(PREFIX)))$(strip $(1)))
 endef
 
-define cmd-ldxx
-  $(call cmd-print,  CCXX    $(strip $(1)))
+define cmd-ldcxx
+  $(call cmd-print,  LDCXX   $(strip $(1)))
   $(Q)g++ $(LDXXFLAGS) -o $(1) $(2) $(addprefix -L, $(4)) $(addprefix -l, $(3))
 endef
 
 define cmd-make
   $(call cmd-info,  MAKE    $(strip $(1)))
-  $(Q)$(MAKE) --no-print-directory $(1)
+  $(Q)+$(MAKE) --no-print-directory $(1)
 endef
 
 define cmd-mkdir
@@ -69,3 +76,7 @@ define cmd-mkdir
   $(Q)mkdir $(1)
 endef
 
+define cmd-run
+  $(call cmd-print,  RUN     $(strip $(patsubst ./%,%,$(1))))
+  $(Q)$(1) $(2)
+endef
