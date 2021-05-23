@@ -24,6 +24,9 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <cerrno>
+
+#include <metasys/sys/SystemException.hxx>
 
 
 namespace metasys {
@@ -31,6 +34,7 @@ namespace metasys {
 
 class FileDescriptor
 {
+ protected:
 	int  _fd;
 
 
@@ -45,21 +49,25 @@ class FileDescriptor
 	{
 	}
 
-	FileDescriptor(const FileDescriptor &other) = delete;
-	FileDescriptor(FileDescriptor &&other) noexcept;
-	~FileDescriptor();
+	FileDescriptor(const FileDescriptor &other) noexcept = default;
 
-	FileDescriptor &operator=(const FileDescriptor &other) = delete;
-
-	FileDescriptor &operator=(FileDescriptor &&other) noexcept
+	FileDescriptor(FileDescriptor &&other) noexcept
+		: _fd(other._fd)
 	{
-		if (valid()) {
-			if (other._fd != _fd) [[likely]]
-				close();
-		}
-
-		_fd = other._fd;
 		other._fd = -1;
+	}
+
+	~FileDescriptor() = default;
+
+	FileDescriptor &operator=(const FileDescriptor &other) noexcept =
+		default;
+
+	FileDescriptor &operator=(FileDescriptor &&other)
+	{
+		int tmp = other._fd;
+
+		other._fd = -1;
+		_fd = tmp;
 
 		return *this;
 	}
@@ -74,7 +82,14 @@ class FileDescriptor
 		return (_fd >= 0);
 	}
 
-	int reset(int fd = -1) noexcept;
+	int reset(int fd = -1) noexcept
+	{
+		int tmp = _fd;
+
+		_fd = fd;
+
+		return tmp;
+	}
 
 	template<typename ErrHandler>
 	auto close(ErrHandler &&handler) noexcept (noexcept (handler(-1)))
@@ -89,9 +104,20 @@ class FileDescriptor
 		return handler(::close(tmp));
 	}
 
-	void close();
+	void close()
+	{
+		close([](int ret) {
+			if (ret < 0) [[unlikely]]
+				closethrow();
+		});
+	}
 
-	static void closethrow();
+	static void closethrow()
+	{
+		assert(errno != EBADF);
+
+		SystemException::throwErrno();
+	}
 };
 
 

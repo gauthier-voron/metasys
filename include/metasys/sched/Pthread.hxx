@@ -77,7 +77,7 @@ concept PthreadArgCall = PthreadRoutine<Routine>
 
 template<
 	typename JoinRet = void *,
-	PthreadBehavior Behavior= PthreadBehavior::Terminate
+	PthreadBehavior Behavior = PthreadBehavior::Terminate
 	>
 requires (detail::PointerTransferable<JoinRet> || std::same_as<JoinRet, void>)
 class Pthread
@@ -128,18 +128,17 @@ class Pthread
 
 	void _stop() noexcept
 	{
-		assert(valid());
-
 		if constexpr (Behavior & PthreadBehavior::Cancel) {
 			trycancel();
 		}
 
 		if constexpr (Behavior == PthreadBehavior::Terminate) {
-			std::terminate();
+			if (valid())
+				std::terminate();
 		} else if constexpr (Behavior == PthreadBehavior::Detach) {
-			detach();
+			::pthread_detach(_tid);
 		} else if constexpr (Behavior == PthreadBehavior::Join) {
-			join();
+			::pthread_join(_tid, NULL);
 		} else {
 			static_assert (Behavior == PthreadBehavior::Nothing);
 		}
@@ -184,18 +183,15 @@ class Pthread
 
 	~Pthread()
 	{
-		if (valid())
-			_stop();
+		_stop();
 	}
 
 	Pthread &operator=(const Pthread &other) = delete;
 
 	Pthread &operator=(Pthread &&other) noexcept
 	{
-		if (valid()) {
-			if (pthread_equal(_tid, other._tid) != 0) [[likely]]
-				_stop();
-		}
+		if (pthread_equal(_tid, other._tid) != 0) [[likely]]
+			_stop();
 
 		_tid = other._tid;
 		other._tid = INVALID;
@@ -218,6 +214,8 @@ class Pthread
 	}
 
 
+	// ====================================================================
+
 	template<typename Routine, typename Arg, typename ErrHandler>
 	requires detail::PthreadArgCall<Routine, JoinRet, Arg>
 	      && std::invocable<ErrHandler, int>
@@ -239,12 +237,20 @@ class Pthread
 	template<typename Routine, typename Arg, typename ErrHandler>
 	requires detail::PthreadArgCall<Routine, JoinRet, Arg>
 	      && std::invocable<ErrHandler, int>
-	auto create(Routine routine, Arg arg, ErrHandler &&handler)
+	static Pthread createinit(const pthread_attr_t *attr, Routine routine,
+				  Arg arg, ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
 	{
-		return create(NULL, routine, arg,
-			      std::forward<ErrHandler>(handler));
+		pthread_t tid;
+
+		handler(::pthread_create(&tid, attr,
+					 routine_cast<Routine>(routine),
+					 ptr_cast<Arg>(arg)));
+
+		return Pthread(tid);
 	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	template<typename Routine, typename ErrHandler>
 	requires detail::PthreadNoArgCall<Routine, JoinRet>
@@ -266,12 +272,20 @@ class Pthread
 	template<typename Routine, typename ErrHandler>
 	requires detail::PthreadNoArgCall<Routine, JoinRet>
 	      && std::invocable<ErrHandler, int>
-	auto create(Routine routine, ErrHandler &&handler)
+	static Pthread createinit(const pthread_attr_t *attr, Routine routine,
+				  ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
 	{
-		return create(NULL, routine,
-			      std::forward<ErrHandler>(handler));
+		pthread_t tid;
+
+		handler(::pthread_create(&tid, attr,
+					 routine_cast<Routine>(routine),
+					 NULL));
+
+		return Pthread(tid);
 	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	template<auto Method, typename Obj, typename ErrHandler>
 	requires detail::PointerTransferable<Obj>
@@ -295,12 +309,20 @@ class Pthread
 	requires detail::PointerTransferable<Obj>
 	      && detail::InvokeCompatible<decltype (Method), JoinRet, Obj>
 	      && std::invocable<ErrHandler, int>
-	auto create(Obj obj, ErrHandler &&handler)
+	static Pthread createinit(const pthread_attr_t *attr, Obj obj,
+				  ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
 	{
-		return create<Method>(NULL, obj,
-				      std::forward<ErrHandler>(handler));
+		pthread_t tid;
+
+		handler(::pthread_create(&tid, attr,
+					 routine_cast(_wrapper<Method, Obj>),
+					 ptr_cast<Obj>(obj)));
+
+		return Pthread(tid);
 	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	template<auto Method, typename ErrHandler>
 	requires detail::InvokeCompatible<decltype (Method), JoinRet>
@@ -321,18 +343,20 @@ class Pthread
 	template<auto Method, typename ErrHandler>
 	requires detail::InvokeCompatible<decltype (Method), JoinRet>
 	      && std::invocable<ErrHandler, int>
-	auto create(ErrHandler &&handler)
+	static Pthread createinit(const pthread_attr_t *attr,
+				  ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
 	{
-		int ret;
+		pthread_t tid;
 
-		assert(valid() == false);
+		handler(::pthread_create(&tid, attr,
+					 routine_cast(_wrapper<Method>),
+					 NULL));
 
-		ret = ::pthread_create(&_tid, NULL,
-				       routine_cast(_wrapper<Method>), NULL);
-
-		return handler(ret);
+		return Pthread(tid);
 	}
+
+	// --------------------------------------------------------------------
 
 	template<typename Routine, typename Arg>
 	requires detail::PthreadArgCall<Routine, JoinRet, Arg>
@@ -348,10 +372,16 @@ class Pthread
 
 	template<typename Routine, typename Arg>
 	requires detail::PthreadArgCall<Routine, JoinRet, Arg>
-	void create(Routine routine, Arg arg)
+	static Pthread createinit(const pthread_attr_t *attr, Routine routine,
+				  Arg arg)
 	{
-		create(NULL, routine, arg);
+		return createinit(attr, routine, arg, [](int ret) {
+			if (ret != 0) [[unlikely]]
+				createthrow(ret);
+		});
 	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	template<typename Routine>
 	requires detail::PthreadNoArgCall<Routine, JoinRet>
@@ -368,11 +398,15 @@ class Pthread
 
 	template<typename Routine>
 	requires detail::PthreadNoArgCall<Routine, JoinRet>
-	      && std::same_as<std::invoke_result_t<Routine>, JoinRet>
-	void create(Routine routine)
+	static Pthread createinit(const pthread_attr_t *attr, Routine routine)
 	{
-		create(NULL, routine);
+		return createinit(attr, routine, [](int ret) {
+			if (ret != 0) [[unlikely]]
+				createthrow(ret);
+		});
 	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	template<auto Method, typename Obj>
 	requires detail::PointerTransferable<Obj>
@@ -390,10 +424,15 @@ class Pthread
 	template<auto Method, typename Obj>
 	requires detail::PointerTransferable<Obj>
 	      && detail::InvokeCompatible<decltype (Method), JoinRet, Obj>
-	void create(Obj obj)
+	static Pthread createinit(const pthread_attr_t *attr, Obj obj)
 	{
-		create<Method>(NULL, obj);
+		return createinit<Method>(attr, obj, [](int ret) {
+			if (ret != 0) [[unlikely]]
+				createthrow(ret);
+		});
 	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 	template<auto Method>
 	requires detail::InvokeCompatible<decltype (Method), JoinRet>
@@ -409,10 +448,172 @@ class Pthread
 
 	template<auto Method>
 	requires detail::InvokeCompatible<decltype (Method), JoinRet>
+	static Pthread createinit(const pthread_attr_t *attr)
+	{
+		return createinit<Method>(attr, [](int ret) {
+			if (ret != 0) [[unlikely]]
+				createthrow(ret);
+		});
+	}
+
+	// ====================================================================
+
+	template<typename Routine, typename Arg, typename ErrHandler>
+	requires detail::PthreadArgCall<Routine, JoinRet, Arg>
+	      && std::invocable<ErrHandler, int>
+	auto create(Routine routine, Arg arg, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return create(NULL, routine, arg,
+			      std::forward<ErrHandler>(handler));
+	}
+
+	template<typename Routine, typename Arg, typename ErrHandler>
+	requires detail::PthreadArgCall<Routine, JoinRet, Arg>
+	      && std::invocable<ErrHandler, int>
+	static Pthread createinit(Routine routine, Arg arg,
+				  ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return createinit(NULL, routine, arg,
+				  std::forward<ErrHandler>(handler));
+	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	template<typename Routine, typename ErrHandler>
+	requires detail::PthreadNoArgCall<Routine, JoinRet>
+	      && std::invocable<ErrHandler, int>
+	auto create(Routine routine, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return create(NULL, routine,
+			      std::forward<ErrHandler>(handler));
+	}
+
+	template<typename Routine, typename ErrHandler>
+	requires detail::PthreadNoArgCall<Routine, JoinRet>
+	      && std::invocable<ErrHandler, int>
+	static Pthread createinit(Routine routine, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return createinit(NULL, routine,
+				  std::forward<ErrHandler>(handler));
+	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	template<auto Method, typename Obj, typename ErrHandler>
+	requires detail::PointerTransferable<Obj>
+	      && detail::InvokeCompatible<decltype (Method), JoinRet, Obj>
+	      && std::invocable<ErrHandler, int>
+	auto create(Obj obj, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return create<Method>(NULL, obj,
+				      std::forward<ErrHandler>(handler));
+	}
+
+	template<auto Method, typename Obj, typename ErrHandler>
+	requires detail::PointerTransferable<Obj>
+	      && detail::InvokeCompatible<decltype (Method), JoinRet, Obj>
+	      && std::invocable<ErrHandler, int>
+	static Pthread createinit(Obj obj, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return createinit<Method>(NULL, obj,
+					  std::forward<ErrHandler>(handler));
+	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	template<auto Method, typename ErrHandler>
+	requires detail::InvokeCompatible<decltype (Method), JoinRet>
+	      && std::invocable<ErrHandler, int>
+	auto create(ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return create<Method>(NULL, std::forward<ErrHandler>(handler));
+	}
+
+	template<auto Method, typename ErrHandler>
+	requires detail::InvokeCompatible<decltype (Method), JoinRet>
+	      && std::invocable<ErrHandler, int>
+	static Pthread createinit(ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return createinit<Method>(NULL,
+					  std::forward<ErrHandler>(handler));
+	}
+
+	// --------------------------------------------------------------------
+
+	template<typename Routine, typename Arg>
+	requires detail::PthreadArgCall<Routine, JoinRet, Arg>
+	void create(Routine routine, Arg arg)
+	{
+		create(NULL, routine, arg);
+	}
+
+	template<typename Routine, typename Arg>
+	requires detail::PthreadArgCall<Routine, JoinRet, Arg>
+	static Pthread createinit(Routine routine, Arg arg)
+	{
+		return createinit(NULL, routine, arg);
+	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	template<typename Routine>
+	requires detail::PthreadNoArgCall<Routine, JoinRet>
+	      && std::same_as<std::invoke_result_t<Routine>, JoinRet>
+	void create(Routine routine)
+	{
+		create(NULL, routine);
+	}
+
+	template<typename Routine>
+	requires detail::PthreadNoArgCall<Routine, JoinRet>
+	static Pthread createinit(Routine routine)
+	{
+		return createinit(NULL, routine);
+	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	template<auto Method, typename Obj>
+	requires detail::PointerTransferable<Obj>
+	      && detail::InvokeCompatible<decltype (Method), JoinRet, Obj>
+	void create(Obj obj)
+	{
+		create<Method>(NULL, obj);
+	}
+
+	template<auto Method, typename Obj>
+	requires detail::PointerTransferable<Obj>
+	      && detail::InvokeCompatible<decltype (Method), JoinRet, Obj>
+	static Pthread createinit(Obj obj)
+	{
+		return createinit<Method>(NULL, obj);
+	}
+
+	//  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+	template<auto Method>
+	requires detail::InvokeCompatible<decltype (Method), JoinRet>
 	void create()
 	{
 		create<Method>(NULL);
 	}
+
+	template<auto Method>
+	requires detail::InvokeCompatible<decltype (Method), JoinRet>
+	static Pthread createinit()
+	{
+		return createinit<Method>(NULL);
+	}
+
+	// ====================================================================
 
 	static void createthrow(int ret)
 	{

@@ -20,6 +20,7 @@
 #include <metasys/sys/SystemException.hxx>
 
 #include <cerrno>
+#include <cstdlib>
 
 #include <metasys/sys/ErrnoException.hxx>
 
@@ -44,18 +45,30 @@ void SystemException::throwErrno(int err)
 		throw ErrnoException<EADDRNOTAVAIL>();
 	case EAGAIN:
 		throw ErrnoException<EAGAIN>();
+	case ECONNREFUSED:
+		throw ErrnoException<ECONNREFUSED>();
 	case EDESTADDRREQ:
 		throw ErrnoException<EDESTADDRREQ>();
 	case EDQUOT:
 		throw ErrnoException<EDQUOT>();
 	case EFBIG:
 		throw ErrnoException<EFBIG>();
+	case EINPROGRESS:
+		throw ErrnoException<EINPROGRESS>();
 	case EINTR:
 		throw ErrnoException<EINTR>();
+	case EINVAL:
+		throw ErrnoException<EINVAL>();
 	case EIO:
 		throw ErrnoException<EIO>();
 	case ELOOP:
 		throw ErrnoException<ELOOP>();
+	case EMFILE:
+		throw ErrnoException<EMFILE>();
+	case ENFILE:
+		throw ErrnoException<ENFILE>();
+	case ENOBUFS:
+		throw ErrnoException<ENOBUFS>();
 	case ENOENT:
 		throw ErrnoException<ENOENT>();
 	case ENOMEM:
@@ -64,13 +77,19 @@ void SystemException::throwErrno(int err)
 		throw ErrnoException<ENOSPC>();
 	case ENOTDIR:
 		throw ErrnoException<ENOTDIR>();
+	case EOVERFLOW:
+		throw ErrnoException<EOVERFLOW>();
 	case EPERM:
 		throw ErrnoException<EPERM>();
 	case EPIPE:
 		throw ErrnoException<EPIPE>();
 	case EROFS:
 		throw ErrnoException<EROFS>();
+	case ESRCH:
+		throw ErrnoException<ESRCH>();
+	case ETIMEDOUT:
+		throw ErrnoException<ETIMEDOUT>();
 	default:
-		throw ErrnoException<0>();
+		::abort();
 	}
 }

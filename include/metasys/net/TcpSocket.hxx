@@ -1,61 +1,37 @@
-// Copyright 2021 Gauthier Voron
-//
-// This file is part of Metasys.
-//
-// Metasys is free software: you can redistribute it and/or modify it under the
-// terms of the GNU General Public License as published by the Free Software
-// Foundation, either version 3 of the License, or (at your option) any later
-// version.
-//
-// Metasys is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
-// details.
-//
-// You should have received a copy of the GNU General Public License along with
-// Metasys. If not, see <https://www.gnu.org/licenses/>.
-//
-
-
 #ifndef _INCLUDE_METASYS_NET_TCPSOCKET_HXX_
 #define _INCLUDE_METASYS_NET_TCPSOCKET_HXX_
 
 
-#include <netinet/ip.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-
 #include <cassert>
-
+#include <cerrno>
 #include <concepts>
-#include <utility>
 
+#include <metasys/io/ReadableDescriptor.hxx>
+#include <metasys/io/WritableDescriptor.hxx>
 #include <metasys/net/InetAddress.hxx>
-#include <metasys/net/TcpBaseSocket.hxx>
+#include <metasys/net/TcpSocketDescriptor.hxx>
+#include <metasys/sys/SystemException.hxx>
 
 
 namespace metasys {
 
 
-class TcpSocket : public TcpBaseSocket
+namespace details {
+
+
+using TcpSocketBase =
+	WritableInterface
+	<ReadableInterface
+	 <TcpSocketDescriptor>>;
+
+
+}
+
+
+class TcpSocket : public details::TcpSocketBase
 {
-	friend class TcpServerSocket;
-
-
- protected:
-	constexpr TcpSocket(int fd) noexcept
-		: TcpBaseSocket(fd)
-	{
-	}
-
-
  public:
-	constexpr TcpSocket() noexcept = default;
-	TcpSocket(const TcpSocket &other) = delete;
-	TcpSocket(TcpSocket &&other) noexcept = default;
-
-	TcpSocket &operator=(const TcpSocket &other) = delete;
-	TcpSocket &operator=(TcpSocket &&other) noexcept = default;
+	using details::TcpSocketBase::TcpSocketBase;
 
 
 	template<typename ErrHandler>
@@ -68,7 +44,7 @@ class TcpSocket : public TcpBaseSocket
 		assert(valid());
 
 		saddr = reinterpret_cast<const struct sockaddr *> (addr);
-		ret = ::connect(fd(), saddr, sizeof (*addr));
+		ret = ::connect(value(), saddr, sizeof (*addr));
 
 		return handler(ret);
 	}
@@ -77,13 +53,35 @@ class TcpSocket : public TcpBaseSocket
 	auto connect(const InetAddress &addr, ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
 	{
-		return connect(addr, std::forward<ErrHandler>(handler));
+		return connect(addr.saddrin(),
+			       std::forward<ErrHandler>(handler));
 	}
 
-	void connect(const InetAddress &addr);
-	void connect(const struct sockaddr_in *addr);
+	void connect(const struct sockaddr_in *addr)
+	{
+		connect(addr, [](int ret) {
+			if (ret < 0) [[unlikely]]
+				throwconnect();
+		});
+	}
 
-	static void connectthrow();
+	void connect(const InetAddress &addr)
+	{
+		connect(addr.saddrin());
+	}
+
+	static void throwconnect()
+	{
+		assert(errno != EAFNOSUPPORT);
+		assert(errno != EALREADY);
+		assert(errno != EBADF);
+		assert(errno != EFAULT);
+		assert(errno != EISCONN);
+		assert(errno != ENOTSOCK);
+		assert(errno != EPROTOTYPE);
+
+		SystemException::throwErrno();
+	}
 
 
 	template<typename ErrHandler>
@@ -96,70 +94,93 @@ class TcpSocket : public TcpBaseSocket
 		assert(valid());
 
 		saddr.sa_family = AF_UNSPEC;
-		ret = ::connect(fd(), &saddr, sizeof (saddr));
+		ret = ::connect(value(), &saddr, sizeof (saddr));
 
 		return handler(ret);
 	}
 
-	void disconnect();
-
-	static void disconnectthrow();
-
-
-	template<typename ErrHandler>
-	auto read(void *dest, size_t len, ErrHandler &&handler)
-		noexcept (noexcept (handler(-1)))
+	void disconnect()
 	{
-		return handler(::read(fd(), dest, len));
+		disconnect([](int ret) {
+			if (ret < 0) [[unlikely]]
+				throwdisconnect();
+		});
 	}
 
-	size_t read(void *dest, size_t len);
-
-	static void readthrow();
-
-
-	template<typename ErrHandler>
-	auto write(const void *src, size_t len, ErrHandler &&handler)
-		noexcept (noexcept (handler(-1)))
+	static void throwdisconnect()
 	{
-		return handler(::write(fd(), src, len));
+		throwconnect();
 	}
 
-	size_t write(const void *src, size_t len);
-
-	static void writethrow();
-
 
 	template<typename ErrHandler>
-	static TcpSocket instance(const struct sockaddr_in *addr,
-				  ErrHandler &&handler)
+	requires std::invocable<ErrHandler, int>
+	static TcpSocket connectinit(const struct sockaddr_in *addr, int flags,
+				     ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
 	{
-		TcpSocket sock;
-		int ret;
+		int err;
+		TcpSocket ret = TcpSocket::openinit(flags, [&err](int r){
+			err = r;
+		});
 
-		if ((ret = sock.open([](int ret) { return ret; })) < 0)
+		if (err < 0) [[unlikely]]
 			goto err;
 
-		if ((ret = sock.connect(addr, [](int r) { return r; })) < 0)
-			goto err;
+		if ((err = ret.connect(addr, [](int r) { return r; })) < 0)
+			goto err_close;
 
-		return sock;
+		return ret;
+	 err_close:
+		ret.close();
 	 err:
-		handler(ret);
-		return TcpSocket();
+		handler(err);
+		return ret;
 	}
 
 	template<typename ErrHandler>
-	static TcpSocket instance(const InetAddress &addr,
-				  ErrHandler &&handler)
+	requires std::invocable<ErrHandler, int>
+	static TcpSocket connectinit(const struct sockaddr_in *addr,
+				     ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
 	{
-		return instance(addr, std::forward<ErrHandler>(handler));
+		return connectinit(addr, 0, std::forward<ErrHandler>(handler));
 	}
 
-	static TcpSocket instance(const InetAddress &addr);
-	static TcpSocket instance(const struct sockaddr_in *addr);
+	template<typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+	static TcpSocket connectinit(const InetAddress &addr, int flags,
+				     ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return connectinit(addr.saddrin(), flags,
+				   std::forward<ErrHandler>(handler));
+	}
+
+	template<typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+	static TcpSocket connectinit(const InetAddress &addr,
+				     ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return connectinit(addr.saddrin(),
+				   std::forward<ErrHandler>(handler));
+	}
+
+	static TcpSocket connectinit(const struct sockaddr_in *addr,
+				     int flags = 0)
+	{
+		TcpSocket ret = TcpSocket::openinit(flags);
+
+		ret.connect(addr);
+
+		return ret;
+	}
+
+	static TcpSocket connectinit(const InetAddress &addr, int flags = 0)
+	{
+		return connectinit(addr.saddrin(), flags);
+	}
 };
 
 

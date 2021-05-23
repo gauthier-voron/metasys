@@ -1,50 +1,112 @@
-// Copyright 2021 Gauthier Voron
-//
-// This file is part of Metasys.
-//
-// Metasys is free software: you can redistribute it and/or modify it under the
-// terms of the GNU General Public License as published by the Free Software
-// Foundation, either version 3 of the License, or (at your option) any later
-// version.
-//
-// Metasys is distributed in the hope that it will be useful, but WITHOUT ANY
-// WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS
-// FOR A PARTICULAR PURPOSE. See the GNU General Public License for more
-// details.
-//
-// You should have received a copy of the GNU General Public License along with
-// Metasys. If not, see <https://www.gnu.org/licenses/>.
-//
-
-
 #ifndef _INCLUDE_METASYS_NET_TCPSERVERSOCKET_HXX_
 #define _INCLUDE_METASYS_NET_TCPSERVERSOCKET_HXX_
 
 
-#include <netinet/ip.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-
 #include <cassert>
-#include <cerrno>
+#include <concepts>
 
-#include <metasys/net/InetAddress.hxx>
-#include <metasys/net/TcpBaseSocket.hxx>
 #include <metasys/net/TcpSocket.hxx>
+#include <metasys/net/TcpSocketDescriptor.hxx>
+#include <metasys/sys/SystemException.hxx>
 
 
 namespace metasys {
 
 
-class TcpServerSocket : public TcpBaseSocket
+class TcpServerSocket : public details::TcpSocketDescriptor
 {
  public:
-	constexpr TcpServerSocket() noexcept = default;
-	TcpServerSocket(const TcpServerSocket &other) = delete;
-	TcpServerSocket(TcpServerSocket &&other) noexcept = default;
+	using details::TcpSocketDescriptor::TcpSocketDescriptor;
 
-	TcpServerSocket &operator=(const TcpServerSocket &other) = delete;
-	TcpServerSocket &operator=(TcpServerSocket &&other) noexcept = default;
+
+	template<typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+	TcpSocket accept(struct sockaddr_in *from, int flags,
+			 ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		socklen_t slen = sizeof (*from);
+		int ret;
+
+		assert(valid());
+
+		ret = ::accept4(value(),
+				reinterpret_cast<struct sockaddr *> (from),
+				&slen, flags);
+
+		assert(slen == sizeof (*from));
+
+		handler(ret);
+
+		return TcpSocket(ret);
+	}
+
+	template<typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+	TcpSocket accept(InetAddress *from, int flags, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return accept(from->saddrin(), flags,
+			      std::forward<ErrHandler>(handler));
+	}
+
+	template<typename Address, typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+		&& (!std::convertible_to<Address, int>)
+	TcpSocket accept(Address &&from, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return accept(std::forward<Address>(from), 0,
+			      std::forward<ErrHandler>(handler));
+	}
+
+	template<typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+	TcpSocket accept(int flags, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return accept(static_cast<struct sockaddr_in *> (nullptr),
+			      flags, std::forward<ErrHandler>(handler));
+	}
+
+	template<typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+	TcpSocket accept(ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		return accept(static_cast<struct sockaddr_in *> (nullptr),
+			      0, std::forward<ErrHandler>(handler));
+	}
+
+	TcpSocket accept(struct sockaddr_in *from = nullptr, int flags = 0)
+	{
+		return accept(from, flags, [](int ret) {
+			if (ret < 0) [[unlikely]]
+				throwaccept();
+		});
+	}
+
+	TcpSocket accept(InetAddress *from, int flags = 0)
+	{
+		return accept(from->saddrin(), flags);
+	}
+
+	TcpSocket accept(int flags)
+	{
+		return accept(static_cast<struct sockaddr_in *> (nullptr),
+			      flags);
+	}
+
+	static void throwaccept()
+	{
+		assert(errno != EBADF);
+		assert(errno != EFAULT);
+		assert(errno != EINVAL);
+		assert(errno != ENOTSOCK);
+		assert(errno != EOPNOTSUPP);
+
+		SystemException::throwErrno();
+	}
 
 
 	template<typename ErrHandler>
@@ -53,117 +115,114 @@ class TcpServerSocket : public TcpBaseSocket
 	{
 		assert(valid());
 
-		return handler(::listen(fd(), backlog));
+		return handler(::listen(value(), backlog));
 	}
 
-	void listen(int backlog);
-
-	static void listenthrow();
-
-
-	template<typename ErrHandler>
-	TcpSocket accept(struct sockaddr_in *from, ErrHandler &&handler)
-		noexcept (noexcept (handler(-1)))
+	void listen(int backlog = 32)
 	{
-		socklen_t slen = sizeof (*from);
-		int ret;
-
-		assert(valid());
-
-		ret = ::accept(fd(),
-			       reinterpret_cast<struct sockaddr *> (from),
-			       &slen);
-
-		handler(ret);
-
-		return TcpSocket(ret);
+		listen(backlog, [](int ret) {
+			if (ret < 0) [[unlikely]]
+				throwlisten();
+		});
 	}
 
-	template<typename ErrHandler>
-	TcpSocket accept(InetAddress *from, ErrHandler &&handler)
-		noexcept (noexcept (handler(-1)))
-	{
-		return accept(from->saddrin(),
-			      std::forward<ErrHandler>(handler));
-	}
-
-	template<typename ErrHandler>
-	TcpSocket accept(ErrHandler &&handler)
-		noexcept (noexcept (handler(-1)))
-	{
-		return accept(reinterpret_cast<struct sockaddr_in *> (NULL),
-			      std::forward<ErrHandler>(handler));
-	}
-
-	TcpSocket accept(InetAddress *from);
-	TcpSocket accept(struct sockaddr_in *from);
-	TcpSocket accept();
-
-	static void acceptthrow();
-
-
-	template<typename ErrHandler, bool ReuseAddr = true>
+	template<bool ReusePort = true, typename ErrHandler>
 	requires std::invocable<ErrHandler, int>
-	static TcpServerSocket instance(const struct sockaddr_in *addr,
-					int backlog, ErrHandler &&handler)
+	static TcpServerSocket listeninit(const struct sockaddr_in *addr,
+					  int backlog, int flags,
+					  ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
 	{
-		TcpServerSocket sock;
-		int ret;
+		int err;
+		TcpServerSocket ret = TcpServerSocket::openinit(flags,
+								[&err](int r) {
+			err = r;
+		});
 
-		if ((ret = sock.open([](int ret) { return ret; })) < 0)
+		if (err < 0) [[unlikely]]
 			goto err;
 
-		if constexpr (ReuseAddr) {
-			ret = sock.setreuseaddr(true, [](int r) { return r; });
-			if (ret < 0)
-				goto err;
+		if constexpr (ReusePort) {
+			err = ret.setreuseport(true, [](int r) { return r; });
+			if (err < 0) [[unlikely]]
+				goto err_close;
 		}
 
-		if ((ret = sock.bind(addr, [](int ret) { return ret; })) < 0)
-			goto err;
+		err = ret.bind(addr, [](int r) { return r; });
+		if (err < 0) [[unlikely]]
+			goto err_close;
 
-		if ((ret = sock.listen(backlog, [](int r) { return r; })) < 0)
-			goto err;
+		err = ret.listen(backlog, [](int r) { return r; });
+		if (err < 0) [[unlikely]]
+			goto err_close;
 
-		return sock;
+		return ret;
+	 err_close:
+		ret.close();
 	 err:
-		handler(ret);
-		return TcpServerSocket();
+		handler(err);
+		return ret;
 	}
 
-	template<typename ErrHandler, bool ReuseAddr = true>
+	template<bool ReusePort = true, typename ErrHandler>
 	requires std::invocable<ErrHandler, int>
-	static TcpServerSocket instance(const InetAddress &addr,
-					int backlog, ErrHandler &&handler)
-		noexcept (noexcept (handler(-1)))
+	static TcpServerSocket listeninit(const InetAddress &addr, int backlog,
+					  int flags, ErrHandler &&handler)
 	{
-		return instance<ErrHandler, ReuseAddr>
-			(addr.saddrin(), backlog,
+		return listeninit<ReusePort>
+			(addr.saddrin(), backlog, flags,
 			 std::forward<ErrHandler>(handler));
 	}
 
-	template<bool ReuseAddr = true>
-	static TcpServerSocket instance(const InetAddress &addr, int backlog)
+	template<bool ReusePort = true, typename Address, typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+	static TcpServerSocket listeninit(Address &&addr, int backlog,
+					  ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
 	{
-		return instance<ReuseAddr>(addr.saddrin(), backlog);
+		return listeninit(std::forward<Address>(addr), backlog, 0,
+				  std::forward<ErrHandler>(handler));
 	}
 
-	template<bool ReuseAddr = true>
-	static TcpServerSocket instance(const struct sockaddr_in *addr,
-					int backlog)
+	template<bool ReusePort = true, typename Address, typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+	static TcpServerSocket listeninit(Address &&addr, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
 	{
-		TcpServerSocket sock;
+		return listeninit(std::forward<Address>(addr), 32, 0,
+				  std::forward<ErrHandler>(handler));
+	}
 
-		sock.open();
+	template<bool ReusePort = true>
+	static TcpServerSocket listeninit(const struct sockaddr_in *addr,
+					  int backlog = 32, int flags = 0)
+	{
+		TcpServerSocket ret = TcpServerSocket::openinit(flags);
 
-		if (ReuseAddr)
-			sock.setreuseaddr(true);
+		if constexpr (ReusePort)
+			ret.setreuseport(true);
 
-		sock.bind(addr);
-		sock.listen(backlog);
+		ret.bind(addr);
 
-		return sock;
+		ret.listen(backlog);
+
+		return ret;
+	}
+
+	template<bool ReusePort = true>
+	static TcpServerSocket listeninit(const InetAddress &addr,
+					  int backlog = 32, int flags = 0)
+	{
+		return listeninit<ReusePort>(addr.saddrin(), backlog, flags);
+	}
+
+	static void throwlisten()
+	{
+		assert(errno != EBADF);
+		assert(errno != ENOTSOCK);
+		assert(errno != EOPNOTSUPP);
+
+		SystemException::throwErrno();
 	}
 };
 
