@@ -1,5 +1,7 @@
-obj
-lib
 bin
-.config
+lib
 main.cxx
+obj
+.config
+.depends.d
+.depends.mk
