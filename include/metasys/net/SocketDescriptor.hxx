@@ -87,6 +87,57 @@ class SocketDescriptor : public ClosingDescriptor
 
 	template<typename ErrHandler>
 	requires std::invocable<ErrHandler, int>
+	auto getsockopt(int level, int optname, void *optval,
+			socklen_t *optlen, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		assert(valid());
+
+		return handler(::getsockopt(value(), level, optname, optval,
+					    optlen));
+	}
+
+	template<typename Value, typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
+	auto getsockopt(int level, int optname, Value *optval,
+			ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		socklen_t slen = sizeof (Value);
+
+		return getsockopt(level, optname, optval, &slen,
+				  std::forward<ErrHandler>(handler));
+	}
+
+	void getsockopt(int level, int optname, void *optval,
+			socklen_t *optlen) noexcept
+	{
+		getsockopt(level, optname, optval, optlen, [](int ret) {
+			if (ret < 0) [[unlikely]]
+				throwgetsockopt();
+		});
+	}
+
+	template<typename Value>
+	void getsockopt(int level, int optname, Value *optval) noexcept
+	{
+		socklen_t slen = sizeof (Value);
+
+		getsockopt(level, optname, optval, &slen);
+	}
+
+	static void throwgetsockopt() noexcept
+	{
+		assert(errno != EBADF);
+		assert(errno != EFAULT);
+		assert(errno != EINVAL);
+		assert(errno != ENOPROTOOPT);
+		assert(errno != ENOTSOCK);
+	}
+
+
+	template<typename ErrHandler>
+	requires std::invocable<ErrHandler, int>
 	auto setsockopt(int level, int optname, const void *optval,
 			socklen_t optlen, ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
@@ -133,6 +184,16 @@ class SocketDescriptor : public ClosingDescriptor
 		assert(errno != ENOTSOCK);
 
 		SystemException::throwErrno();
+	}
+
+
+	int geterror() noexcept
+	{
+		int ret;
+
+		getsockopt(SOL_SOCKET, SO_ERROR, &ret);
+
+		return ret;
 	}
 };
 
