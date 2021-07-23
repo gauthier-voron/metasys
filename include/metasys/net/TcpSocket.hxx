@@ -70,7 +70,7 @@ class TcpSocket : public details::TcpSocketBase
 		connect(addr.saddrin());
 	}
 
-	static void throwconnect()
+	[[noreturn]] static void throwconnect()
 	{
 		assert(errno != EAFNOSUPPORT);
 		assert(errno != EALREADY);
@@ -107,7 +107,7 @@ class TcpSocket : public details::TcpSocketBase
 		});
 	}
 
-	static void throwdisconnect()
+	[[noreturn]] static void throwdisconnect()
 	{
 		throwconnect();
 	}
