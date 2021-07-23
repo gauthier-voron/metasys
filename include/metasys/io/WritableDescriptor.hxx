@@ -65,8 +65,15 @@ using WritableDescriptor = WritableInterface<FileDescriptor>;
 static_assert (OutputStream<WritableDescriptor>);
 
 
-extern WritableDescriptor stdout;
-extern WritableDescriptor stderr;
+constexpr WritableDescriptor stdout() noexcept
+{
+	return WritableDescriptor(STDOUT_FILENO);
+}
+
+constexpr WritableDescriptor stderr() noexcept
+{
+	return WritableDescriptor(STDERR_FILENO);
+}
 
 
 }

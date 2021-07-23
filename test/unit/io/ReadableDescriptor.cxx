@@ -31,6 +31,20 @@ static inline void __get_pipe(int fds[2])
 	assert(ret == 0);
 }
 
+static inline int __replace_stdin(int fd)
+{
+	int cpy = ::dup(STDIN_FILENO);
+	int ret;
+
+	assert(cpy >= 0);
+
+	ret = ::dup2(fd, STDIN_FILENO);
+
+	assert(ret == STDIN_FILENO);
+
+	return cpy;
+}
+
 static volatile bool handler_waiting = false;
 static void nop_handler(int)
 {
@@ -243,6 +257,29 @@ TEST(ReadableDescriptor, ReadHalfInterrupted)
 
 TEST(ReadableDescriptor, Stdin)
 {
-	EXPECT_TRUE(metasys::stdin.valid());
-	EXPECT_EQ(metasys::stdin.value(), STDIN_FILENO);
+	EXPECT_TRUE(metasys::stdin().valid());
+	EXPECT_EQ(metasys::stdin().value(), STDIN_FILENO);
+}
+
+TEST(ReadableDescriptor, StdinRead)
+{
+	int pfds[2];
+	int oldstdin;
+	size_t ret;
+	char c;
+
+	__get_pipe(pfds);
+	oldstdin = __replace_stdin(pfds[0]);
+
+	::write(pfds[1], "A", 1);
+
+	ret = metasys::stdin().read(&c, 1);
+
+	EXPECT_EQ(ret, 1);
+	EXPECT_EQ(c, 'A');
+
+	__replace_stdin(oldstdin);
+
+	::close(pfds[0]);
+	::close(pfds[1]);
 }

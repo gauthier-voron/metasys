@@ -61,7 +61,10 @@ using ReadableDescriptor = ReadableInterface<FileDescriptor>;
 static_assert (InputStream<ReadableDescriptor>);
 
 
-constexpr ReadableDescriptor stdin = ReadableDescriptor(STDIN_FILENO);
+constexpr ReadableDescriptor stdin() noexcept
+{
+	return ReadableDescriptor(STDIN_FILENO);
+}
 
 
 }
