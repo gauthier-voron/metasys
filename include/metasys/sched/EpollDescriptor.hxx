@@ -111,37 +111,38 @@ class EpollDescriptor : public ClosingDescriptor
 
 
 	template<typename ErrHandler>
-	auto create(ErrHandler &&handler) noexcept (noexcept (handler(-1)))
+	auto create(int flags, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
 	{
 		assert(valid() == false);
 
-		reset(::epoll_create(1));
+		reset(::epoll_create1(flags));
 
 		return handler(value());
 	}
 
-	void create()
+	void create(int flags = 0)
 	{
-		create([](int ret) {
+		create(flags, [](int ret) {
 			if (ret < 0) [[unlikely]]
 				throwcreate();
 		});
 	}
 
 	template<typename ErrHandler>
-	static EpollDescriptor createinit(ErrHandler &&handler)
+	static EpollDescriptor createinit(int flags, ErrHandler &&handler)
 		noexcept (noexcept (handler(-1)))
 	{
-		int fd = ::epoll_create(1);
+		int fd = ::epoll_create1(flags);
 
 		handler(fd);
 
 		return EpollDescriptor(fd);
 	}
 
-	static EpollDescriptor createinit()
+	static EpollDescriptor createinit(int flags = 0)
 	{
-		return createinit([](int ret) {
+		return createinit(flags, [](int ret) {
 			if (ret < 0) [[unlikely]]
 				throwcreate();
 		});
