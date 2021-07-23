@@ -2,6 +2,7 @@
 
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <sys/select.h>
 #include <sys/socket.h>
 
 #include <cassert>
@@ -104,4 +105,38 @@ TEST(TcpSocket, ConnectInitFail)
 
 	EXPECT_FALSE(sock.valid());
 	EXPECT_EQ(sysfd0, sysfd1);
+}
+
+TEST(TcpSocket, GetNoError)
+{
+	TcpSocket sock = TcpSocket::openinit();
+	int err = sock.geterror();
+
+	EXPECT_EQ(err, 0);
+}
+
+TEST(TcpSocket, GetError)
+{
+	struct sockaddr_in sin;
+
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons(1);
+	sin.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+	TcpSocket sock = TcpSocket::openinit(SOCK_NONBLOCK);
+	int err, ret = sock.connect(&sin, [](int ret) {
+		return (ret < 0) ? errno : ret;
+	});
+	fd_set fds;
+
+	EXPECT_EQ(ret, EINPROGRESS);
+
+	FD_ZERO(&fds);
+	FD_SET(sock.value(), &fds);
+
+	::select(sock.value() + 1, nullptr, &fds, nullptr, nullptr);
+
+	err = sock.geterror();
+
+	EXPECT_EQ(err, ECONNREFUSED);
 }
