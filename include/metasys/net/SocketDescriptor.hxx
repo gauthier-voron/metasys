@@ -77,7 +77,7 @@ class SocketDescriptor : public ClosingDescriptor
 		});
 	}
 
-	static void throwopen()
+	[[noreturn]] static void throwopen()
 	{
 		assert(errno != EINVAL);
 
@@ -174,7 +174,7 @@ class SocketDescriptor : public ClosingDescriptor
 		setsockopt(level, optname, &optval, sizeof (optval));
 	}
 
-	static void throwsetsockopt()
+	[[noreturn]] static void throwsetsockopt()
 	{
 		assert(errno != EBADF);
 		assert(errno != EDOM);
