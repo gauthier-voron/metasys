@@ -15,6 +15,7 @@
 
 using metasys::ErrnoException;
 using metasys::InetAddress;
+using metasys::InterruptException;
 using metasys::TcpServerSocket;
 
 
@@ -75,6 +76,37 @@ static bool __try_connect_tcp_port(uint16_t port)
 	::close(fd);
 
 	return (ret == 0);
+}
+
+static volatile bool handler_waiting = false;
+static void nop_handler(int)
+{
+	handler_waiting = false;
+}
+
+static inline void __send_nop_signal(unsigned int seconds)
+{
+	struct sigaction sa;
+	int ret;
+
+	assert(handler_waiting == false);
+
+	::sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	sa.sa_handler = nop_handler;
+
+	ret = ::sigaction(SIGALRM, &sa, nullptr);
+	assert(ret == 0);
+
+	::alarm(seconds);
+
+	handler_waiting = true;
+}
+
+static inline void __wait_nop_signal()
+{
+	while (handler_waiting)
+		asm volatile ("pause");
 }
 
 
@@ -198,4 +230,23 @@ TEST(TcpServerSocket, ListenInitNoReusePort)
 	}
 
 	EXPECT_FALSE(__fd_is_valid(sysfd));
+}
+
+TEST(TcpServerSocket, AcceptInterrupt)
+{
+	uint16_t port = __find_free_tcp_port();
+
+	{
+		TcpServerSocket sock = TcpServerSocket::listeninit
+			(InetAddress(port));
+
+		EXPECT_TRUE(sock.valid());
+		EXPECT_TRUE(__fd_is_valid(sock.value()));
+
+		__send_nop_signal(1);
+
+		EXPECT_THROW(sock.accept(), InterruptException);
+
+		__wait_nop_signal();
+	}
 }
