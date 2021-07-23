@@ -39,18 +39,11 @@ class ReadableInterface : public Descriptor
 
 	size_t read(void *dest, size_t len)
 	{
-		ssize_t ret;
-
-		assert(Descriptor::valid());
-
-	retry:
-		if ((ret = ::read(Descriptor::_fd, dest, len))<0)[[unlikely]] {
-			if ((errno == EAGAIN) || (errno == EINTR))
-				goto retry;
-			throwread();
-		}
-
-		return ((size_t) ret);
+		return read(dest, len, [](ssize_t ret) -> size_t {
+			if (ret < 0) [[unlikely]]
+				throwread();
+			return (size_t) ret;
+		});
 	}
 
 	static void throwread()

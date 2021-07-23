@@ -41,19 +41,11 @@ class WritableInterface : public Descriptor
 	[[gnu::always_inline]]
 	size_t write(const void *src, size_t len)
 	{
-		ssize_t ret;
-
-		assert(Descriptor::valid());
-
-	retry:
-		ret = ::write(Descriptor::_fd, src, len);
-		if (ret <= 0) [[unlikely]] {
-			if ((errno == EAGAIN) || (errno == EINTR))
-				goto retry;
-			throwwrite();
-		}
-
-		return ((size_t) ret);
+		return write(src, len, [](ssize_t ret) -> size_t {
+			if (ret <= 0) [[unlikely]]
+				throwwrite();
+			return (size_t) ret;
+		});
 	}
 
 	static void throwwrite()

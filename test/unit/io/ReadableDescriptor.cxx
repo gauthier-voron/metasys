@@ -1,13 +1,17 @@
 #include <metasys/io/ReadableDescriptor.hxx>
 
 #include <fcntl.h>
+#include <signal.h>
+#include <unistd.h>
 
 #include <gtest/gtest.h>
 
 #include <metasys/sys/FileDescriptor.hxx>
+#include <metasys/sys/ErrnoException.hxx>
 
 
 using metasys::FileDescriptor;
+using metasys::InterruptException;
 using metasys::ReadableDescriptor;
 
 
@@ -23,7 +27,39 @@ static inline int __get_new_fd()
 
 static inline void __get_pipe(int fds[2])
 {
-	ASSERT_EQ(::pipe(fds), 0);
+	int ret = ::pipe(fds);
+	assert(ret == 0);
+}
+
+static volatile bool handler_waiting = false;
+static void nop_handler(int)
+{
+	handler_waiting = false;
+}
+
+static inline void __send_nop_signal(unsigned int seconds)
+{
+	struct sigaction sa;
+	int ret;
+
+	assert(handler_waiting == false);
+
+	::sigemptyset(&sa.sa_mask);
+	sa.sa_flags = 0;
+	sa.sa_handler = nop_handler;
+
+	ret = ::sigaction(SIGALRM, &sa, nullptr);
+	assert(ret == 0);
+
+	::alarm(seconds);
+
+	handler_waiting = true;
+}
+
+static inline void __wait_nop_signal()
+{
+	while (handler_waiting)
+		asm volatile ("pause");
 }
 
 
@@ -144,6 +180,65 @@ TEST(ReadableDescriptor, ReadEof)
 	EXPECT_TRUE(__fd_is_valid(pfds[0]));
 
 	::close(pfds[0]);
+}
+
+TEST(ReadableDescriptor, ReadInterrupted)
+{
+	int pfds[2];
+
+	__get_pipe(pfds);
+
+	{
+		ReadableDescriptor fd = ReadableDescriptor(pfds[0]);
+		char buf[5];
+
+		EXPECT_TRUE(fd.valid());
+
+		__send_nop_signal(1);
+
+		EXPECT_THROW(fd.read(buf, 5), InterruptException);
+
+		__wait_nop_signal();
+	}
+
+	EXPECT_TRUE(__fd_is_valid(pfds[0]));
+	EXPECT_TRUE(__fd_is_valid(pfds[1]));
+
+	::close(pfds[0]);
+	::close(pfds[1]);
+}
+
+TEST(ReadableDescriptor, ReadHalfInterrupted)
+{
+	int pfds[2];
+
+	__get_pipe(pfds);
+
+	{
+		ReadableDescriptor fd = ReadableDescriptor(pfds[0]);
+		char buf[5];
+		size_t ret;
+
+		EXPECT_TRUE(fd.valid());
+
+		::write(pfds[1], "01", 2);
+
+		__send_nop_signal(1);
+
+		ret = fd.read(buf, 5);
+
+		__wait_nop_signal();
+
+		EXPECT_EQ(ret, 2);
+		EXPECT_EQ(buf[0], '0');
+		EXPECT_EQ(buf[1], '1');
+	}
+
+	EXPECT_TRUE(__fd_is_valid(pfds[0]));
+	EXPECT_TRUE(__fd_is_valid(pfds[1]));
+
+	::close(pfds[0]);
+	::close(pfds[1]);
 }
 
 TEST(ReadableDescriptor, Stdin)

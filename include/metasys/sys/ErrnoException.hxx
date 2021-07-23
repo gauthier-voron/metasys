@@ -48,6 +48,9 @@ class ErrnoException : public SystemException
 };
 
 
+using InterruptException = ErrnoException<EINTR>;
+
+
 }
 
 
