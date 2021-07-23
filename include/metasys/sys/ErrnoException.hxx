@@ -41,6 +41,11 @@ class ErrnoException : public SystemException
 		default;
 	ErrnoException &operator=(ErrnoException &&other) noexcept = default;
 
+	static constexpr int errno() noexcept
+	{
+		return Errno;
+	}
+
 	const char *what() const noexcept override
 	{
 		return ::strerror(Errno);
