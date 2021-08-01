@@ -215,6 +215,11 @@ class Pthread
 		return (pthread_equal(_tid, INVALID) == 0);
 	}
 
+	const pthread_t &value() const noexcept
+	{
+		return _tid;
+	}
+
 
 	// ====================================================================
 
