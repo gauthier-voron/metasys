@@ -130,17 +130,19 @@ class Pthread
 	{
 		if constexpr (Behavior & PthreadBehavior::Cancel) {
 			trycancel();
+		} else if constexpr (Behavior.signum() != 0) {
+			kill(Behavior.signum());
 		}
 
-		if constexpr (Behavior == PthreadBehavior::Terminate) {
+		if constexpr (Behavior & PthreadBehavior::Terminate) {
 			if (valid())
 				std::terminate();
-		} else if constexpr (Behavior == PthreadBehavior::Detach) {
+		} else if constexpr (Behavior & PthreadBehavior::Detach) {
 			::pthread_detach(_tid);
-		} else if constexpr (Behavior == PthreadBehavior::Join) {
+		} else if constexpr (Behavior & PthreadBehavior::Join) {
 			::pthread_join(_tid, NULL);
 		} else {
-			static_assert (Behavior == PthreadBehavior::Nothing);
+			static_assert (Behavior & PthreadBehavior::Nothing);
 		}
 	}
 

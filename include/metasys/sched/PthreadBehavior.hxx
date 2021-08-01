@@ -27,58 +27,47 @@
 namespace metasys {
 
 
-namespace detail {
+namespace details {
 
 
 struct PthreadBehaviorImpl
 {
-	uint8_t  value;
+	static constexpr uint16_t CALLER_MASK  = 0x007;
+	static constexpr uint16_t NOTHING      = 0x001;
+	static constexpr uint16_t TERMINATE    = 0x002;
+	static constexpr uint16_t DETACH       = 0x003;
+	static constexpr uint16_t JOIN         = 0x004;
+
+	static constexpr uint16_t SIGNAL_MASK  = 0xff8;
+	static constexpr uint16_t CANCEL       = 0x008;
+	static constexpr uint16_t KILL_SHIFT   = 4;
+	static constexpr uint16_t KILL_MASK    = 0xff0;
 
 
-	static constexpr uint8_t BASE_MASK = 3;
-	static constexpr uint8_t NOTHING   = 0;
-	static constexpr uint8_t TERMINATE = 1;
-	static constexpr uint8_t DETACH    = 2;
-	static constexpr uint8_t JOIN      = 3;
-
-	static constexpr uint8_t OPTION_MASK = 4;
-	static constexpr uint8_t CANCEL      = 4;
+	uint16_t  value;
 
 
-	constexpr PthreadBehaviorImpl(uint8_t _value) noexcept
+	constexpr PthreadBehaviorImpl(uint16_t _value) noexcept
 		: value(_value)
 	{
 	}
 };
 
 
-struct PthreadBehaviorBase
+constexpr PthreadBehaviorImpl operator|(PthreadBehaviorImpl a,
+					PthreadBehaviorImpl b)
 {
-	uint8_t  value;
-
-
-	constexpr PthreadBehaviorBase(uint8_t _value) noexcept
-		: value(_value)
-	{
+	if (((a.value & PthreadBehaviorImpl::CALLER_MASK) != 0) &&
+	    ((b.value & PthreadBehaviorImpl::CALLER_MASK) != 0)) {
+		throw "two caller behaviors specified";
 	}
-};
 
+	if (((a.value & PthreadBehaviorImpl::SIGNAL_MASK) != 0) &&
+	    ((b.value & PthreadBehaviorImpl::SIGNAL_MASK) != 0)) {
+		throw "two signal behaviors specified";
+	}
 
-struct PthreadBehaviorCancel
-{
-};
-
-
-constexpr PthreadBehaviorImpl operator|(PthreadBehaviorBase b,
-				        PthreadBehaviorCancel) noexcept
-{
-	return { static_cast<uint8_t> (b.value|PthreadBehaviorImpl::CANCEL) };
-}
-
-constexpr PthreadBehaviorImpl operator|(PthreadBehaviorCancel,
-					PthreadBehaviorBase b) noexcept
-{
-	return { static_cast<uint8_t> (b.value|PthreadBehaviorImpl::CANCEL) };
+	return PthreadBehaviorImpl(a.value | b.value);
 }
 
 
@@ -87,42 +76,60 @@ constexpr PthreadBehaviorImpl operator|(PthreadBehaviorCancel,
 
 struct PthreadBehavior
 {
-	using Impl       = detail::PthreadBehaviorImpl;
-	using Base       = detail::PthreadBehaviorBase;
-	using CancelType = detail::PthreadBehaviorCancel;
+	using Impl = details::PthreadBehaviorImpl;
 
 
 	Impl  impl;
 
 
-	constexpr PthreadBehavior(Base _base) noexcept
-		: impl(_base.value)
-	{
-	}
-
 	constexpr PthreadBehavior(Impl _impl) noexcept
 		: impl(_impl)
 	{
+		if ((impl.value & Impl::CALLER_MASK) == 0)
+			impl = impl | Terminate;
 	}
 
 
-	constexpr bool operator==(Base base) const noexcept
+	constexpr bool operator&(Impl t) const
 	{
-		return ((impl.value & Impl::BASE_MASK) == base.value);
+		if ((t.value & Impl::CALLER_MASK) != 0) {
+			if ((t.value & ~Impl::CALLER_MASK) != 0)
+				throw "test for exclusive properties";
+			return ((t.value & Impl::CALLER_MASK) ==
+				(impl.value & Impl::CALLER_MASK));
+		} else if ((t.value & Impl::SIGNAL_MASK) != 0) {
+			if ((t.value & ~Impl::SIGNAL_MASK) != 0)
+				throw "test for exclusive properties";
+			else if (t.value == Impl::CANCEL)
+				return ((impl.value & Impl::SIGNAL_MASK) ==
+					Impl::CANCEL);
+			else if ((t.value & Impl::KILL_MASK) != 0)
+				return ((impl.value & Impl::KILL_MASK) ==
+					(t.value & Impl::KILL_MASK));
+			else
+				throw "test for unknown signal property";
+		} else {
+			throw "test for unknown property";
+		}
 	}
 
-	constexpr bool operator&(CancelType) const noexcept
+	constexpr int signum() const noexcept
 	{
-		return ((impl.value & Impl::CANCEL) != 0);
+		return ((impl.value & Impl::KILL_MASK) >> Impl::KILL_SHIFT);
 	}
 
 
-	static constexpr Base Nothing   { Impl::NOTHING   };
-	static constexpr Base Terminate { Impl::TERMINATE };
-	static constexpr Base Detach    { Impl::DETACH    };
-	static constexpr Base Join      { Impl::JOIN      };
+	static constexpr Impl Nothing   { Impl::NOTHING   };
+	static constexpr Impl Terminate { Impl::TERMINATE };
+	static constexpr Impl Detach    { Impl::DETACH    };
+	static constexpr Impl Join      { Impl::JOIN      };
 
-	static constexpr CancelType Cancel {};
+	static constexpr Impl Cancel    { Impl::CANCEL    };
+
+	static constexpr Impl Kill(int sig = SIGTERM) noexcept
+	{
+		return Impl((sig << Impl::KILL_SHIFT) & Impl::KILL_MASK);
+	}
 };
 
 
