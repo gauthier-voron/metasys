@@ -23,6 +23,7 @@
 
 #include <cassert>
 #include <cerrno>
+#include <csignal>
 
 #include <pthread.h>
 
@@ -724,6 +725,29 @@ class Pthread
 	static void cancelthrow(int ret [[maybe_unused]]) noexcept
 	{
 		assert(ret != ESRCH);
+	}
+
+
+	template<typename ErrHandler>
+	auto kill(int sig, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		assert(valid());
+
+		return handler(::pthread_kill(value(), sig));
+	}
+
+	void kill(int sig) noexcept
+	{
+		kill(sig, [](int ret) {
+			if (ret != 0) [[unlikely]]
+				throwkill(ret);
+		});
+	}
+
+	static void throwkill(int err [[maybe_unused]]) noexcept
+	{
+		assert(err != EINVAL);
 	}
 };
 
