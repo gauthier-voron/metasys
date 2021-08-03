@@ -23,6 +23,7 @@
 
 #include <cassert>
 #include <cerrno>
+#include <csignal>
 
 #include <pthread.h>
 
@@ -130,17 +131,19 @@ class Pthread
 	{
 		if constexpr (Behavior & PthreadBehavior::Cancel) {
 			trycancel();
+		} else if constexpr (Behavior.signum() != 0) {
+			kill(Behavior.signum());
 		}
 
-		if constexpr (Behavior == PthreadBehavior::Terminate) {
+		if constexpr (Behavior & PthreadBehavior::Terminate) {
 			if (valid())
 				std::terminate();
-		} else if constexpr (Behavior == PthreadBehavior::Detach) {
+		} else if constexpr (Behavior & PthreadBehavior::Detach) {
 			::pthread_detach(_tid);
-		} else if constexpr (Behavior == PthreadBehavior::Join) {
+		} else if constexpr (Behavior & PthreadBehavior::Join) {
 			::pthread_join(_tid, NULL);
 		} else {
-			static_assert (Behavior == PthreadBehavior::Nothing);
+			static_assert (Behavior & PthreadBehavior::Nothing);
 		}
 	}
 
@@ -211,6 +214,11 @@ class Pthread
 	bool valid() const noexcept
 	{
 		return (pthread_equal(_tid, INVALID) == 0);
+	}
+
+	const pthread_t &value() const noexcept
+	{
+		return _tid;
 	}
 
 
@@ -365,7 +373,7 @@ class Pthread
 		create(attr, routine, arg, [&](int ret) {
 			if (ret != 0) [[unlikely]] {
 				reset();
-				createthrow(ret);
+				throwcreate(ret);
 			}
 		});
 	}
@@ -377,7 +385,7 @@ class Pthread
 	{
 		return createinit(attr, routine, arg, [](int ret) {
 			if (ret != 0) [[unlikely]]
-				createthrow(ret);
+				throwcreate(ret);
 		});
 	}
 
@@ -391,7 +399,7 @@ class Pthread
 		create(attr, routine, [&](int ret) {
 			if (ret != 0) [[unlikely]] {
 				reset();
-				createthrow(ret);
+				throwcreate(ret);
 			}
 		});
 	}
@@ -402,7 +410,7 @@ class Pthread
 	{
 		return createinit(attr, routine, [](int ret) {
 			if (ret != 0) [[unlikely]]
-				createthrow(ret);
+				throwcreate(ret);
 		});
 	}
 
@@ -416,7 +424,7 @@ class Pthread
 		create<Method>(attr, obj, [&](int ret) {
 			if (ret != 0) [[unlikely]] {
 				reset();
-				createthrow(ret);
+				throwcreate(ret);
 			}
 		});
 	}
@@ -428,7 +436,7 @@ class Pthread
 	{
 		return createinit<Method>(attr, obj, [](int ret) {
 			if (ret != 0) [[unlikely]]
-				createthrow(ret);
+				throwcreate(ret);
 		});
 	}
 
@@ -441,7 +449,7 @@ class Pthread
 		create<Method>(attr, [&](int ret) {
 			if (ret != 0) [[unlikely]] {
 				reset();
-				createthrow(ret);
+				throwcreate(ret);
 			}
 		});
 	}
@@ -452,7 +460,7 @@ class Pthread
 	{
 		return createinit<Method>(attr, [](int ret) {
 			if (ret != 0) [[unlikely]]
-				createthrow(ret);
+				throwcreate(ret);
 		});
 	}
 
@@ -615,7 +623,7 @@ class Pthread
 
 	// ====================================================================
 
-	static void createthrow(int ret)
+	static void throwcreate(int ret)
 	{
 		assert(ret != EINVAL);
 
@@ -648,11 +656,11 @@ class Pthread
 	{
 		return join([](int ret) {
 			if (ret != 0) [[unlikely]]
-				jointhrow(ret);
+				throwjoin(ret);
 		});
 	}
 
-	static void jointhrow(int ret [[maybe_unused]]) noexcept
+	static void throwjoin(int ret [[maybe_unused]]) noexcept
 	{
 		assert(ret != EDEADLK);
 		assert(ret != EINVAL);
@@ -679,11 +687,11 @@ class Pthread
 	{
 		detach([](int ret) {
 			if (ret != 0) [[unlikely]]
-				detachthrow(ret);
+				throwdetach(ret);
 		});
 	}
 
-	static void detachthrow(int ret [[maybe_unused]]) noexcept
+	static void throwdetach(int ret [[maybe_unused]]) noexcept
 	{
 		assert(ret != EINVAL);
 		assert(ret != ESRCH);
@@ -703,7 +711,7 @@ class Pthread
 	{
 		cancel([](int ret) {
 			if (ret != 0) [[unlikely]]
-				cancelthrow(ret);
+				throwcancel(ret);
 		});
 	}
 
@@ -714,9 +722,32 @@ class Pthread
 		});
 	}
 
-	static void cancelthrow(int ret [[maybe_unused]]) noexcept
+	static void throwcancel(int ret [[maybe_unused]]) noexcept
 	{
 		assert(ret != ESRCH);
+	}
+
+
+	template<typename ErrHandler>
+	auto kill(int sig, ErrHandler &&handler)
+		noexcept (noexcept (handler(-1)))
+	{
+		assert(valid());
+
+		return handler(::pthread_kill(value(), sig));
+	}
+
+	void kill(int sig) noexcept
+	{
+		kill(sig, [](int ret) {
+			if (ret != 0) [[unlikely]]
+				throwkill(ret);
+		});
+	}
+
+	static void throwkill(int err [[maybe_unused]]) noexcept
+	{
+		assert(err != EINVAL);
 	}
 };
 

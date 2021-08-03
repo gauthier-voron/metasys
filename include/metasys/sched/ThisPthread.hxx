@@ -31,6 +31,11 @@ namespace metasys {
 
 struct ThisPthread
 {
+	static pthread_t self() noexcept
+	{
+		return ::pthread_self();
+	}
+
 	static void testcancel()
 	{
 		::pthread_testcancel();

@@ -3,12 +3,18 @@
 #include <unistd.h>
 
 #include <cassert>
+#include <csignal>
 #include <string>
 
 #include <gtest/gtest.h>
 
+#include <metasys/sched/PthreadBehavior.hxx>
+#include <metasys/sched/ThisPthread.hxx>
+
 
 using metasys::Pthread;
+using metasys::PthreadBehavior;
+using metasys::ThisPthread;
 using std::string;
 
 
@@ -32,6 +38,20 @@ static pthread_t __get_idle_thread(volatile bool *state)
 	assert(ret == 0);
 
 	return tid;
+}
+
+static void __install_sighandler(int signum, void (*handler)(int))
+{
+	struct sigaction sa;
+	int ret;
+
+	ret = ::sigemptyset(&sa.sa_mask);
+	assert(ret == 0);
+	sa.sa_flags = 0;
+	sa.sa_handler = handler;
+
+	ret = ::sigaction(signum, &sa, NULL);
+	assert(ret == 0);
 }
 
 
@@ -330,4 +350,96 @@ TEST(Pthread, CreateAndCancelCatch)
 	t.join();
 
 	EXPECT_TRUE(CreateAndCancelCatch_ret);
+}
+
+static volatile bool CreateAndKill_ready;
+static volatile bool CreateAndKill_interrupted;
+static volatile pthread_t CreateAndKill_value;
+static void CreateAndKill_sighandler(int)
+{
+	CreateAndKill_value = ThisPthread::self();
+	CreateAndKill_interrupted = true;
+}
+static void CreateAndKill_routine()
+{
+	CreateAndKill_ready = true;
+	while (CreateAndKill_interrupted == false)
+		;
+}
+
+TEST(Pthread, CreateAndKill)
+{
+	Pthread<void> t;
+	pthread_t val;
+
+	__install_sighandler(SIGTERM, CreateAndKill_sighandler);
+
+	CreateAndKill_ready = false;
+	CreateAndKill_interrupted = false;
+	CreateAndKill_value = ThisPthread::self();
+
+	t.create(CreateAndKill_routine);
+
+	EXPECT_TRUE(t.valid());
+	val = t.value();
+
+	while (CreateAndKill_ready == false)
+		;
+
+	t.kill(SIGTERM);
+
+	t.join();
+
+	EXPECT_TRUE(CreateAndKill_interrupted);
+	EXPECT_TRUE(::pthread_equal(val, CreateAndKill_value));
+}
+
+static volatile __thread bool CreateAndAutoKill_stop = false;
+static volatile bool CreateAndAutoKill_interrupted;
+static void CreateAndAutoKill_sighandler(int)
+{
+	CreateAndAutoKill_interrupted = true;
+	CreateAndAutoKill_stop = true;
+}
+static void CreateAndAutoKill_routine()
+{
+	while (CreateAndAutoKill_stop == false)
+		;
+}
+
+TEST(Pthread, CreateAndAutoKill)
+{
+	__install_sighandler(SIGTERM, CreateAndAutoKill_sighandler);
+
+	CreateAndAutoKill_interrupted = false;
+
+	{
+		Pthread<void, PthreadBehavior::Join|PthreadBehavior::Kill()> t;
+
+		t.create(CreateAndAutoKill_routine);
+	}
+
+	EXPECT_TRUE(CreateAndAutoKill_interrupted);
+}
+
+static void KillAfterEnd_sighandler(int)
+{
+}
+static void KillAfterEnd_routine()
+{
+}
+
+TEST(Pthread, KillAfterEnd)
+{
+	Pthread<void> t;
+
+	__install_sighandler(SIGTERM, KillAfterEnd_sighandler);
+
+	t.create(KillAfterEnd_routine);
+
+	::sleep(1);
+
+	t.kill(SIGTERM);
+
+	t.join();
 }
