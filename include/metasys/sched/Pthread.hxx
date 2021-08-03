@@ -373,7 +373,7 @@ class Pthread
 		create(attr, routine, arg, [&](int ret) {
 			if (ret != 0) [[unlikely]] {
 				reset();
-				createthrow(ret);
+				throwcreate(ret);
 			}
 		});
 	}
@@ -385,7 +385,7 @@ class Pthread
 	{
 		return createinit(attr, routine, arg, [](int ret) {
 			if (ret != 0) [[unlikely]]
-				createthrow(ret);
+				throwcreate(ret);
 		});
 	}
 
@@ -399,7 +399,7 @@ class Pthread
 		create(attr, routine, [&](int ret) {
 			if (ret != 0) [[unlikely]] {
 				reset();
-				createthrow(ret);
+				throwcreate(ret);
 			}
 		});
 	}
@@ -410,7 +410,7 @@ class Pthread
 	{
 		return createinit(attr, routine, [](int ret) {
 			if (ret != 0) [[unlikely]]
-				createthrow(ret);
+				throwcreate(ret);
 		});
 	}
 
@@ -424,7 +424,7 @@ class Pthread
 		create<Method>(attr, obj, [&](int ret) {
 			if (ret != 0) [[unlikely]] {
 				reset();
-				createthrow(ret);
+				throwcreate(ret);
 			}
 		});
 	}
@@ -436,7 +436,7 @@ class Pthread
 	{
 		return createinit<Method>(attr, obj, [](int ret) {
 			if (ret != 0) [[unlikely]]
-				createthrow(ret);
+				throwcreate(ret);
 		});
 	}
 
@@ -449,7 +449,7 @@ class Pthread
 		create<Method>(attr, [&](int ret) {
 			if (ret != 0) [[unlikely]] {
 				reset();
-				createthrow(ret);
+				throwcreate(ret);
 			}
 		});
 	}
@@ -460,7 +460,7 @@ class Pthread
 	{
 		return createinit<Method>(attr, [](int ret) {
 			if (ret != 0) [[unlikely]]
-				createthrow(ret);
+				throwcreate(ret);
 		});
 	}
 
@@ -623,7 +623,7 @@ class Pthread
 
 	// ====================================================================
 
-	static void createthrow(int ret)
+	static void throwcreate(int ret)
 	{
 		assert(ret != EINVAL);
 
@@ -656,11 +656,11 @@ class Pthread
 	{
 		return join([](int ret) {
 			if (ret != 0) [[unlikely]]
-				jointhrow(ret);
+				throwjoin(ret);
 		});
 	}
 
-	static void jointhrow(int ret [[maybe_unused]]) noexcept
+	static void throwjoin(int ret [[maybe_unused]]) noexcept
 	{
 		assert(ret != EDEADLK);
 		assert(ret != EINVAL);
@@ -687,11 +687,11 @@ class Pthread
 	{
 		detach([](int ret) {
 			if (ret != 0) [[unlikely]]
-				detachthrow(ret);
+				throwdetach(ret);
 		});
 	}
 
-	static void detachthrow(int ret [[maybe_unused]]) noexcept
+	static void throwdetach(int ret [[maybe_unused]]) noexcept
 	{
 		assert(ret != EINVAL);
 		assert(ret != ESRCH);
@@ -711,7 +711,7 @@ class Pthread
 	{
 		cancel([](int ret) {
 			if (ret != 0) [[unlikely]]
-				cancelthrow(ret);
+				throwcancel(ret);
 		});
 	}
 
@@ -722,7 +722,7 @@ class Pthread
 		});
 	}
 
-	static void cancelthrow(int ret [[maybe_unused]]) noexcept
+	static void throwcancel(int ret [[maybe_unused]]) noexcept
 	{
 		assert(ret != ESRCH);
 	}
