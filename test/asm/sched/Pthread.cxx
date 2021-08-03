@@ -281,3 +281,31 @@ Test(CreateSubDetachAuto)
 
 	thread.create(__routine_CreateSubDetachAuto);
 }
+
+static void __routine_CreateSubKillJoinAuto()
+{
+	asm volatile ("nop");
+}
+
+Model(CreateSubKillJoinAuto)
+{
+	Overhead(pthread_t tid, pthread_t tid = {});
+	int ret;
+
+	ret = pthread_create(&tid, NULL,
+			     (void *(*)(void *))
+			     __routine_CreateSubKillJoinAuto,
+			     NULL);
+
+	if (ret != 0) [[unlikely]]
+		return;
+
+	pthread_kill(tid, SIGTERM);
+	pthread_join(tid, NULL);
+}
+Test(CreateSubKillJoinAuto)
+{
+	Pthread<void, PthreadBehavior::Join | PthreadBehavior::Kill()> thread;
+
+	thread.create(__routine_CreateSubKillJoinAuto);
+}
