@@ -106,7 +106,8 @@ $(call REQUIRE-DEP, $(atest-sources), $(DEP)%.d)
 $(call REQUIRE-DIR, $(atest-objects))
 
 $(BIN)%: %.cxx $(LIB)libmetasys.a
-	$(call cmd-aldcxx, $@, $<, pthread metasys, $(LIB), include/ tools/)
+	$(call cmd-aldcxx, $@, $<, pthread metasys, $(LIB), include/ \
+          test/asm/include/)
 
 
 $(call REQUIRE-DIR, $(LIB)libmetasys.a)
