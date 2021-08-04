@@ -45,12 +45,16 @@ void SystemException::throwErrno(int err)
 		throw ErrnoException<EADDRNOTAVAIL>();
 	case EAGAIN:
 		throw ErrnoException<EAGAIN>();
+	case EBUSY:
+		throw ErrnoException<EBUSY>();
 	case ECONNREFUSED:
 		throw ErrnoException<ECONNREFUSED>();
 	case EDESTADDRREQ:
 		throw ErrnoException<EDESTADDRREQ>();
 	case EDQUOT:
 		throw ErrnoException<EDQUOT>();
+	case EEXIST:
+		throw ErrnoException<EEXIST>();
 	case EFBIG:
 		throw ErrnoException<EFBIG>();
 	case EINPROGRESS:
@@ -61,14 +65,20 @@ void SystemException::throwErrno(int err)
 		throw ErrnoException<EINVAL>();
 	case EIO:
 		throw ErrnoException<EIO>();
+	case EISDIR:
+		throw ErrnoException<EISDIR>();
 	case ELOOP:
 		throw ErrnoException<ELOOP>();
 	case EMFILE:
 		throw ErrnoException<EMFILE>();
+	case EMLINK:
+		throw ErrnoException<EMLINK>();
 	case ENFILE:
 		throw ErrnoException<ENFILE>();
 	case ENOBUFS:
 		throw ErrnoException<ENOBUFS>();
+	case ENODEV:
+		throw ErrnoException<ENODEV>();
 	case ENOENT:
 		throw ErrnoException<ENOENT>();
 	case ENOMEM:
@@ -77,6 +87,8 @@ void SystemException::throwErrno(int err)
 		throw ErrnoException<ENOSPC>();
 	case ENOTDIR:
 		throw ErrnoException<ENOTDIR>();
+	case ENXIO:
+		throw ErrnoException<ENXIO>();
 	case EOVERFLOW:
 		throw ErrnoException<EOVERFLOW>();
 	case EPERM:
