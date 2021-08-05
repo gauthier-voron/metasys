@@ -58,12 +58,74 @@ modules  := fs io net sched sys
 sources  := $(foreach module, $(modules), $(wildcard $(strip $(module))/*.cxx))
 objects  := $(patsubst %.cxx, $(OBJ)%.o, $(sources))
 
-utest-sources := $(foreach m, $(modules), \
-                   $(wildcard test/unit/$(strip $(m))/*.cxx))
+
+ifeq ($(origin TEST),undefined)
+  # No specific test indicated, test all components
+
+  utest-sources := $(foreach m, $(modules), \
+                     $(wildcard test/unit/$(strip $(m))/*.cxx))
+
+  atest-sources := $(foreach m, $(modules), \
+                     $(wildcard test/asm/$(strip $(m))/*.cxx))
+
+else
+  # Specific test indicated, select test source from specification
+  #
+  # Specification can be:
+  #   - a module: if it is one of the words of $(modules)
+  #   - a file: if it is a file that exists under test/{unit,asm}
+  #   - a pattern: if it matches something as a wildcard
+  #                test/{unit,asm}/{module}/*.cxx
+  # If none of them, raise an error.
+
+  utest-sources :=
+  atest-sources :=
+
+  define test-failure
+    $(error "Invalid TEST value: '$(strip $(1))'")
+  endef
+
+  define test-add-module
+    utest-sources += $(wildcard test/unit/$(strip $(1))/*.cxx)
+
+    atest-sources += $(wildcard test/asm/$(strip $(1))/*.cxx)
+  endef
+
+  define test-add-unit
+    utest-sources += $(strip $(1))
+  endef
+
+  define test-add-asm
+    atest-sources += $(strip $(1))
+  endef
+
+  define test-add-pattern
+    utest-sources += $(foreach m, $(modules), \
+                       $(wildcard test/unit/$(strip $(m))/$(strip $(1)).cxx))
+
+    atest-sources += $(foreach m, $(modules), \
+                       $(wildcard test/asm/$(strip $(m))/$(strip $(1)).cxx))
+  endef
+
+  $(foreach t, $(TEST), \
+    $(eval $(call \
+      $(if $(filter $(t), $(modules)), test-add-module, \
+      $(if $(wildcard $(t)), \
+        $(if $(filter $(abspath test/unit)/%, $(abspath $(t))), test-add-unit,\
+        $(if $(filter $(abspath test/asm)/%,  $(abspath $(t))), test-add-asm, \
+        test-failure)), \
+      $(if $(wildcard test/unit/*/$(strip $(t)).cxx), test-add-pattern, \
+      test-failure))), \
+      $(t))))
+
+  utest-sources := $(sort $(utest-sources))
+  atest-sources := $(sort $(atest-sources))
+
+endif
+
+
 utest-objects := $(patsubst %.cxx, $(OBJ)%.o, $(utest-sources))
 
-atest-sources := $(foreach m, $(modules), \
-                   $(wildcard test/asm/$(strip $(m))/*.cxx))
 atest-objects := $(patsubst %.cxx, $(BIN)%, $(atest-sources))
 
 
