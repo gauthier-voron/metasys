@@ -1,0 +1,117 @@
+#!/bin/bash
+#
+#   pre-commit: check that what is about to be committed is valid
+#
+#   There are two types of commit:
+#     1- simple: the most common type of commit, happening on a feature branch
+#     2- core: a commit on one of the core branches (develop and master)
+#   Every commit (simple or core) must always compile. Additionally, core
+#   commits must pass all tests.
+#
+#   This script check what type of commit is about to be made and accordingly
+#   to that type, perform the required checks.
+#
+
+# Identify branch name and commit type.
+# This script performs different checks depending on the commit type which
+# depends on the branch name.
+#
+branch_name="$(git rev-parse --abbrev-ref 'HEAD')"
+core_branches=('master' 'develop')
+commit_type='simple'
+
+for core_branch in "${core_branches[@]}" ; do
+    if [ "${branch_name}" = "${core_branch}" ] ; then
+	commit_type='core'
+	break
+    fi
+done
+
+
+# Identify system wide parameters.
+# These parameters are useful later when performing checks.
+#
+ncore=$(grep -P '^processor\s*:' '/proc/cpuinfo' | wc -l)
+make_npar=$(( ncore * 2 ))
+
+
+# Define a command to perform a check.
+#   Args: a command (n words)
+#   Return: the exit code of the command
+# This command prints the command about to be run, then run the command,
+# storing its output in a logfile.
+# If the command succeed, print 'pass' and return.
+# Otherwise, print 'fail', then the content of the logfile and return.
+#
+test_command() {
+    local str log ret
+
+    for str in "$@" ; do
+	printf " %s" "${str}"
+    done
+
+    printf ": "
+
+    log="$(mktemp --tmpdir --suffix='.log' 'git.pre-commit.XXXXXX')"
+
+    "$@" > "${log}" 2>&1
+    ret=$?
+
+    if [ ${ret} -eq 0 ] ; then
+	printf "pass\n"
+    else
+	printf "fail\n"
+	sed -r 's/^/  /' "${log}"
+    fi
+
+    rm "${log}"
+
+    return ${ret}
+}
+
+
+# Stash everything that is not about to be committed.
+# After this command, we have what the commit would be in the root directory.
+#
+git stash push --keep-index --include-untracked --quiet
+
+# Print that this pre-commit check script is running and what type of commit
+# it recognized.
+#
+printf "[pre-commit check] %s commit (%s)\n" "${commit_type}" "${branch_name}"
+
+# Perform the checks depending on the commit type.
+# Because these checks run for each commit, use specific compilation flags to
+# reduce compilation time.
+# Also add flags to treat warnings as errors.
+#
+(
+    export CXXFLAGS='-Wall -Wextra -Werror -std=c++20 -O0'
+    export LDXXFLAGS=''
+    export ACXXFLAGS="${CXXFLAGS} -DNDEBUG"
+
+    case "${commit_type}" in
+	'simple')
+	    test_command make clean && \
+	    test_command make all -j${make_npar}
+	    ;;
+	'core')
+	    test_command make clean && \
+	    test_command make all -j${make_npar} && \
+	    test_command make test -j${make_npar}
+	    ;;
+    esac
+)
+ret=$?
+
+# Restore what has been stashed earlier.
+# Reset the directory first to avoid conflicting patches for files which are
+# partially staged.
+#
+git reset --hard --quiet
+git stash pop --index --quiet
+
+
+# Exit with the exit code of the performed checks.
+#
+exit ${ret}

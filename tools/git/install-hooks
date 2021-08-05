@@ -1,0 +1,60 @@
+#!/bin/bash
+#
+#   install-hooks: install git hooks on a repository
+#
+#   Install scripts stored along with this script at the correct place in the
+#   git repository.
+#
+
+
+set -e
+
+
+# Get where to install the hooks.
+# If no argument is supplied, try to install on the current working directory.
+# In any case, the install target must be either a directory which contains a
+# '.git' directory or be the '.git' directory itself.
+#
+where='.'
+
+if [ $# -gt 0 ] ; then
+    where="$1" ; shift
+fi
+
+if [ "x${where}" = 'x' ] ; then
+    echo "Invalid install target '${where}'"
+    echo "Must be a git repository"
+    exit 1
+fi >&2
+
+if [ "${where##*/}" = '.git' ] ; then
+    gitroot="${where}"
+else
+    gitroot="${where}/.git"
+fi
+
+if [ ! -d "${gitroot}" ] ; then
+    echo "Invalid install target '${where}'"
+    echo "Must be a git repository (cannot find '${gitroot}')"
+    exit 1
+fi >&2
+
+
+# For all the hooks to be installed, check if they are in the same directory
+# as this very script.
+# If so, install them in the '.git/hooks' directory.
+#
+srcdir="${0%/*}"
+srcs=('pre-commit')
+
+for src in "${srcs[@]}" ; do
+    if [ ! -f "${srcdir}/${src}" ] ; then
+	echo "Missing source script '${srcdir}/S{src}'"
+	echo "Abort installation..."
+	exit 1
+    fi >&2
+done
+
+for src in "${srcs[@]}" ; do
+    cp "${srcdir}/${src}" "${gitroot}/hooks/${src}"
+done
