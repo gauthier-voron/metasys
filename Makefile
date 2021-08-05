@@ -70,7 +70,7 @@ atest-objects := $(patsubst %.cxx, $(BIN)%, $(atest-sources))
 -include .config/Makefile
 
 
-all: $(LIB)libmetasys.a
+all: $(LIB)libmetasys.a $(BIN)utest $(atest-objects)
 
 install: $(LIB)libmetasys.a
 	$(call cmd-install, /usr/lib)
