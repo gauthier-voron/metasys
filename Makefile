@@ -68,6 +68,8 @@ ifeq ($(origin TEST),undefined)
   atest-sources := $(foreach m, $(modules), \
                      $(wildcard test/asm/$(strip $(m))/*.cxx))
 
+  gtest-filter  :=
+
 else
   # Specific test indicated, select test source from specification
   #
@@ -80,6 +82,7 @@ else
 
   utest-sources :=
   atest-sources :=
+  gtest-filter  :=
 
   define test-failure
     $(error "Invalid TEST value: '$(strip $(1))'")
@@ -89,10 +92,15 @@ else
     utest-sources += $(wildcard test/unit/$(strip $(1))/*.cxx)
 
     atest-sources += $(wildcard test/asm/$(strip $(1))/*.cxx)
+
+    gtest-filter += $(patsubst %.cxx,%.*, \
+                      $(notdir $(wildcard test/unit/$(strip $(1))/*.cxx)))
   endef
 
   define test-add-unit
     utest-sources += $(strip $(1))
+
+    gtest-filter += $(patsubst %.cxx, %.*, $(notdir $(strip $(1))))
   endef
 
   define test-add-asm
@@ -105,6 +113,8 @@ else
 
     atest-sources += $(foreach m, $(modules), \
                        $(wildcard test/asm/$(strip $(m))/$(strip $(1)).cxx))
+
+    gtest-filter += $(strip $(1)).*
   endef
 
   $(foreach t, $(TEST), \
@@ -120,6 +130,10 @@ else
 
   utest-sources := $(sort $(utest-sources))
   atest-sources := $(sort $(atest-sources))
+
+  ifneq ($(gtest-filter),)
+    gtest-filter := '--gtest_filter=$(call JOIN, :, $(gtest-filter))'
+  endif
 
 endif
 
@@ -148,7 +162,7 @@ test:
 	$(call cmd-make, asm-test)
 
 unit-test: $(BIN)utest
-	$(call cmd-run, ./$<)
+	$(call cmd-run, ./$<, $(gtest-filter))
 
 asm-test: $(atest-objects)
 	$(call cmd-run, ./tools/asmcmp, --score=0 $^)
