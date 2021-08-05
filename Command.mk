@@ -16,9 +16,9 @@
 #
 
 
-CXXFLAGS  := -Wall -Wextra -O3 -std=c++20 -g -flto
-LDXXFLAGS := -flto
-ACXXFLAGS := -Wall -Wextra -O3 -std=c++20 -g -DNDEBUG
+CXXFLAGS  ?= -Wall -Wextra -O3 -std=c++20 -g -flto
+LDXXFLAGS ?= -flto
+ACXXFLAGS ?= -Wall -Wextra -O3 -std=c++20 -g -DNDEBUG
 
 
 define cmd-aldcxx
