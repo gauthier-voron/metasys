@@ -74,6 +74,14 @@ define FIND
 endef
 
 
+_JOIN_EMPTY :=
+_JOIN_SPACE := $(_JOIN_EMPTY) $(_JOIN_EMPTY)
+
+define JOIN
+$(subst $(_JOIN_SPACE),$(strip $(1)),$(strip $(2)))
+endef
+
+
 # Autodirectory generation
 # Simply do $(call REQUIRE-DIR, <some-dir>) to generate rules to create
 # all the directory hierarchy.
